@@ -6299,7 +6299,7 @@ function AccessTab({ data, update, notify }) {
     onEnter("super");
 
   } catch (err) {
-    notify("Login failed: " + (err && err.message ? err.message : "Unknown error");
+    notify("Login failed: " + (err && err.message ? err.message : "Unknown error"));
   } finally {
     setAuthLoading(false);
   }
