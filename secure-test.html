@@ -6286,7 +6286,7 @@ function AccessTab({ data, update, notify }) {
     );
 
     const result = await response.json();
-
+    console.log("SUPABASE LOGIN:", response.status, result);
     if (!response.ok || !result.access_token) {
       throw new Error(
         result.error_description || result.msg || "Login failed"
