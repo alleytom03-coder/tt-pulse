@@ -6508,7 +6508,7 @@ function SignIn({ data, onEnter, notify }) {
             {choice.key === "super" ? (
   <div style={{ display: "grid", gap: "10px", width: "100%" }}>
     <input
-      className="gate-code"
+      className="gate-code email-input"
       type="email"
       value={email}
       autoFocus
@@ -7232,6 +7232,9 @@ function Styles() {
 .gate-lock { color: var(--ball-2); }
 .gate-open { color: var(--blue); }
 .gate-enter { display:flex; gap: 8px; margin-top: 16px; flex-wrap:wrap; }
+.email-input {
+  text-transform: none !important;
+}
 .gate-code { flex:1; min-width: 160px; letter-spacing: .28em; text-transform:uppercase; font-size: 17px; }
 
 /* role chip in the bar */
