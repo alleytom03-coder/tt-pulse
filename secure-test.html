@@ -6299,7 +6299,7 @@ function AccessTab({ data, update, notify }) {
     onEnter("super");
 
   } catch (err) {
-    notify("Super Admin login failed. Check your email and password.");
+    notify("Login failed: " + (err && err.message ? err.message : "Unknown error");
   } finally {
     setAuthLoading(false);
   }
