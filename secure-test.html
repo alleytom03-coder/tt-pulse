@@ -6458,7 +6458,53 @@ function SignIn({ data, onEnter, notify }) {
   const [password, setPassword] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
   const codes = data.codes || {};
-  
+  const signInSuperAdmin = async () => {
+  if (!email.trim() || !password) {
+    notify("Enter your Super Admin email and password.");
+    return;
+  }
+
+  setAuthLoading(true);
+
+  try {
+    const C = window.TT_CLOUD;
+
+    const response = await fetch(
+      C.url.replace(/\/$/, "") + "/auth/v1/token?grant_type=password",
+      {
+        method: "POST",
+        headers: {
+          apikey: C.anonKey,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          email: email.trim(),
+          password: password
+        })
+      }
+    );
+
+    const result = await response.json();
+
+    console.log("SUPABASE LOGIN:", response.status, result);
+
+    if (!response.ok || !result.access_token) {
+      throw new Error(
+        result.error_description || result.msg || "Login failed"
+      );
+    }
+
+    window.TT_AUTH_TOKEN = result.access_token;
+    sessionStorage.setItem("tt_auth_token", result.access_token);
+
+    onEnter("super");
+
+  } catch (err) {
+    notify("Login failed: " + (err && err.message ? err.message : "Unknown error"));
+  } finally {
+    setAuthLoading(false);
+  }
+};
   
  const submit = async () => {
   if (!choice) return;
