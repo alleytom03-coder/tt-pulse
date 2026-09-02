@@ -1398,7 +1398,13 @@ function inferColumns(rows) {
   const age = take((s) => s.age > 0.7 && s.distinct > 3, (s) => s.age);
 
   const nameCols = stats
-    .filter((s) => !used.has(s.i) && s.name > 0.6 && s.filled > 0.4)
+  .filter(
+    (s) =>
+      !used.has(s.i) &&
+      s.name > 0.6 &&
+      s.filled > 0.4 &&
+      (gender < 0 || s.i < gender)
+  )
     .sort((a, b) => b.name - a.name || a.i - b.i);
 
   let first = -1;
