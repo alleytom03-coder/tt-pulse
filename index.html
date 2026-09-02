@@ -1380,12 +1380,37 @@ function inferColumns(rows) {
 
   // Gender first: its values are alphabetic and would otherwise look like names.
   const gender = take((s) => s.gender > 0.7 && s.distinct <= 8, (s) => s.gender);
-  const ageGroup = take(
+  
+    const ageGroup = take(
   (s) => {
     const values = sample
       .map((r) => String(r[s.i] == null ? "" : r[s.i]).trim().toLowerCase())
       .filter(Boolean);
- const availability = take(
+
+    const matches = values.filter(
+      (v) => v === "adult" || v === "kids" || v === "kid"
+    ).length;
+
+    return values.length > 0 && matches / values.length > 0.7;
+  },
+  (s) => s.filled
+);
+const ageGroup = take(
+  (s) => {
+    const values = sample
+      .map((r) => String(r[s.i] == null ? "" : r[s.i]).trim().toLowerCase())
+      .filter(Boolean);
+
+    const matches = values.filter(
+      (v) => v === "adult" || v === "kids" || v === "kid"
+    ).length;
+
+    return values.length > 0 && matches / values.length > 0.7;
+  },
+  (s) => s.filled
+);
+
+const availability = take(
   (s) => {
     const values = sample
       .map((r) => String(r[s.i] == null ? "" : r[s.i]).trim().toLowerCase())
@@ -1399,14 +1424,6 @@ function inferColumns(rows) {
     ).length;
 
     return values.length > 0 && matches / values.length > 0.3;
-  },
-  (s) => s.filled
-);
-    const matches = values.filter(
-      (v) => v === "adult" || v === "kids" || v === "kid"
-    ).length;
-
-    return values.length > 0 && matches / values.length > 0.7;
   },
   (s) => s.filled
 );
