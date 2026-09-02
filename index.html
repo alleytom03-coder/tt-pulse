@@ -2506,7 +2506,12 @@ function AvailabilityTab({ data, update, notify }) {
             const key = ymd(d);
             const marked = slotsFor(key).length;
             const formTotal = SLOTS.filter((sl) => sl !== "6:00 – 8:00 AM").length;
-            const status = marked === 0 ? "" : (marked >= formTotal ? " full" : " partial");
+            const status =
+  marked === 0
+    ? " unavailable"
+    : marked >= formTotal
+    ? " full"
+    : " partial";
             return (
               <button
                 key={key}
