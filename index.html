@@ -7167,7 +7167,27 @@ function Styles() {
 }
 .cal-cell:disabled { opacity: .4; cursor: not-allowed; }
 .cal-cell.has { border-color: var(--ball); }
-.cal-cell.open { background: var(--ball); color:#FFF6F6; border-color: var(--ball); }
+.cal-cell.full {
+  background: #16794b;
+  border-color: #16794b;
+  color: white;
+}
+
+.cal-cell.partial {
+  background: #d97706;
+  border-color: #d97706;
+  color: white;
+}
+
+.cal-cell.unavailable {
+  background: #b42318;
+  border-color: #b42318;
+  color: white;
+}
+.cal-cell.open {
+  outline: 3px solid var(--ball);
+  outline-offset: 2px;
+}
 .cal-pad { border: 0; background: transparent; }
 .cal-dot { position:absolute; top:4px; right:5px; font-size: 9.5px; background: var(--ball); color:#FFF6F6;
   border-radius: 999px; padding: 0 4px; font-weight:700; }
