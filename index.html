@@ -1385,7 +1385,23 @@ function inferColumns(rows) {
     const values = sample
       .map((r) => String(r[s.i] == null ? "" : r[s.i]).trim().toLowerCase())
       .filter(Boolean);
+ const availability = take(
+  (s) => {
+    const values = sample
+      .map((r) => String(r[s.i] == null ? "" : r[s.i]).trim().toLowerCase())
+      .filter(Boolean);
 
+    const matches = values.filter(
+      (v) =>
+        v.includes("not available") ||
+        v.includes("available on") ||
+        v.includes("availability")
+    ).length;
+
+    return values.length > 0 && matches / values.length > 0.3;
+  },
+  (s) => s.filled
+);
     const matches = values.filter(
       (v) => v === "adult" || v === "kids" || v === "kid"
     ).length;
@@ -1418,7 +1434,7 @@ function inferColumns(rows) {
     if (nameCols[0].spaced > 0.4) whole = nameCols[0].i;
     else first = nameCols[0].i;
   }
-  return { first, last, whole, phone, gender, ageGroup, age };
+  return { first, last, whole, phone, gender, ageGroup, availability, age };
 }
 
 /* Turns raw rows into records keyed the way the importers expect. */
@@ -1449,6 +1465,7 @@ function inferRecords(rows) {
       phone: at(r, map.phone),
       gender: at(r, map.gender),
       agegroup: at(r, map.ageGroup),
+      availability: at(r, map.availability),
       age: at(r, map.age),
     }))
     .filter((o) => o.firstname || o.lastname || o.name);
