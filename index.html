@@ -5933,7 +5933,55 @@ function ReportTab({ data, tiers, notify }) {
     r.rallyAgainst,
     r.points,
   ]);
+ const downloadExcelReport = () => {
+  if (!window.XLSX) {
+    notify("Excel library is not available.");
+    return;
+  }
 
+  const wb = window.XLSX.utils.book_new();
+
+  // Summary
+  const summary = [
+    ["TT Pulse Tournament Report"],
+    ["From", start],
+    ["To", end],
+    ["Matches", matches.length],
+    ["Sets Played", setsPlayed],
+    ["Rally Points", rally],
+    ["Players", playerRows.length],
+    [],
+    ["Generated", new Date().toLocaleString()],
+  ];
+
+  const wsSummary = window.XLSX.utils.aoa_to_sheet(summary);
+  window.XLSX.utils.book_append_sheet(wb, wsSummary, "Summary");
+
+  // Team standings
+  const wsTeams = window.XLSX.utils.aoa_to_sheet([
+    teamColumns,
+    ...teamExport,
+  ]);
+  window.XLSX.utils.book_append_sheet(wb, wsTeams, "Team Standings");
+
+  // Player performance
+  const wsPlayers = window.XLSX.utils.aoa_to_sheet([
+    columns,
+    ...rows,
+  ]);
+  window.XLSX.utils.book_append_sheet(wb, wsPlayers, "Player Performance");
+
+  const filename =
+    "TT-Pulse-Report-" +
+    (start || "all") +
+    "-to-" +
+    (end || "all") +
+    ".xlsx";
+
+  window.XLSX.writeFile(wb, filename);
+
+  notify("Excel report downloaded.");
+};
   return (
     <div className="stack">
       <section className="card">
@@ -5970,6 +6018,9 @@ function ReportTab({ data, tiers, notify }) {
             <button className="btn btn-ghost" onClick={() => window.print()}>
               Print
             </button>
+            <button className="btn btn-ghost" onClick={downloadExcelReport}>
+  Download Excel
+</button>
           </div>
         </header>
 
