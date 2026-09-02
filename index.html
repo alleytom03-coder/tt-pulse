@@ -91,10 +91,20 @@ window.TT_CLOUD = {
     var body = pending; pending = null; inflight = true;
     fetch(base(), {
       method: "POST",
-      headers: head({ Prefer: "resolution=merge-duplicates,return=representation" }),
+      headers: {
+  ...head({ Prefer: "resolution=merge-duplicates,return=representation" }),
+  Authorization: "Bearer " + (window.TT_AUTH_TOKEN || C.anonKey)
+},
       body: JSON.stringify([{ id: C.row, doc: JSON.parse(body), updated_at: new Date().toISOString() }])
     })
       .then(function (r) { return r.ok ? r.json() : null; })
+      .then(async function (r) {
+  if (!r.ok) {
+    const text = await r.text();
+    throw new Error("Cloud save failed (" + r.status + "): " + text);
+  }
+  return r.json();
+})
       .then(function (rows) {
         if (rows && rows[0]) window.storage.mark = rows[0].updated_at;
         window.storage.lastError = "";
@@ -2388,7 +2398,7 @@ function AvailabilityTab({ data, update, notify }) {
           <Field
             label="Player"
             hint={
-              allPlayers.length
+              workPlayers.length
                 ? `${workPlayers.length} player${workPlayers.length === 1 ? "" : "s"} available in this group`
                 : "No players loaded yet — import/add players in the Players tab first."
             }
@@ -6405,10 +6415,62 @@ function AccessTab({ data, update, notify }) {
 function SignIn({ data, onEnter, notify }) {
   const [choice, setChoice] = useState(null);
   const [code, setCode] = useState("");
+  const [email, setEmail] = useState("");
+const [password, setPassword] = useState("");
+const [authLoading, setAuthLoading] = useState(false);
   const codes = data.codes || {};
+  const signInSuperAdmin = async () => {
+  if (!email.trim() || !password) {
+    notify("Enter your Super Admin email and password.");
+    return;
+  }
 
-  const submit = () => {
+  setAuthLoading(true);
+
+  try {
+    const C = window.TT_CLOUD;
+
+    const response = await fetch(
+      C.url.replace(/\/$/, "") + "/auth/v1/token?grant_type=password",
+      {
+        method: "POST",
+        headers: {
+          apikey: C.anonKey,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          email: email.trim(),
+          password: password
+        })
+      }
+    );
+
+    const result = await response.json();
+
+    if (!response.ok || !result.access_token) {
+      throw new Error(
+        result.error_description || result.msg || "Login failed"
+      );
+    }
+
+    window.TT_AUTH_TOKEN = result.access_token;
+    sessionStorage.setItem("tt_auth_token", result.access_token);
+
+    onEnter("super");
+
+  } catch (err) {
+    notify("Login failed: " + (err && err.message ? err.message : "Unknown error"));
+  } finally {
+    setAuthLoading(false);
+  }
+};
+
+  const submit = async () => {
     if (!choice) return;
+    if (choice.key === "super") {
+  await signInSuperAdmin();
+  return;
+}
     if (!choice.needsCode) return onEnter(choice.key);
     const given = code.trim().toUpperCase();
     if (given && given === String(codes[choice.key] || "").toUpperCase()) {
@@ -6447,18 +6509,39 @@ function SignIn({ data, onEnter, notify }) {
 
         {choice ? (
           <div className="gate-enter">
-            {choice.needsCode ? (
-              <input
-                className="gate-code mono"
-                value={code}
-                autoFocus
-                maxLength={12}
-                onChange={(e) => setCode(e.target.value.toUpperCase())}
-                onKeyDown={(e) => e.key === "Enter" && submit()}
-                placeholder="Access code"
-                aria-label={choice.label + " access code"}
-              />
-            ) : null}
+           {choice.key === "super" ? (
+  <div style={{ display: "grid", gap: "10px", width: "100%" }}>
+    <input
+      className="gate-code email-input"
+      type="email"
+      value={email}
+      autoFocus
+      onChange={(e) => setEmail(e.target.value)}
+      placeholder="Super Admin email"
+      aria-label="Super Admin email"
+    />
+    <input
+      className="gate-code"
+      type="password"
+      value={password}
+      onChange={(e) => setPassword(e.target.value)}
+      onKeyDown={(e) => e.key === "Enter" && submit()}
+      placeholder="Password"
+      aria-label="Super Admin password"
+    />
+  </div>
+) : choice.needsCode ? (
+  <input
+    className="gate-code mono"
+    value={code}
+    autoFocus
+    maxLength={12}
+    onChange={(e) => setCode(e.target.value.toUpperCase())}
+    onKeyDown={(e) => e.key === "Enter" && submit()}
+    placeholder="Access code"
+    aria-label={choice.label + " access code"}
+  />
+) : null}
             <button className="btn btn-primary" onClick={submit}>
               Enter as {choice.label.toLowerCase()}
             </button>
@@ -7153,6 +7236,9 @@ function Styles() {
 .gate-lock { color: var(--ball-2); }
 .gate-open { color: var(--blue); }
 .gate-enter { display:flex; gap: 8px; margin-top: 16px; flex-wrap:wrap; }
+.email-input {
+  text-transform: none !important;
+}
 .gate-code { flex:1; min-width: 160px; letter-spacing: .28em; text-transform:uppercase; font-size: 17px; }
 
 /* role chip in the bar */
