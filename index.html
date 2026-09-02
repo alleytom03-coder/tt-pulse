@@ -6403,6 +6403,42 @@ function AccessTab({ data, update, notify }) {
           </table>
         </div>
       </section>
+      <section className="card">
+  <header className="card-head">
+    <div>
+      <span className="eyebrow">Super Admin only</span>
+      <h2>Data Management</h2>
+    </div>
+  </header>
+
+  <p className="muted plan-note">
+    Back up the current tournament before clearing data. Resetting cannot be undone.
+  </p>
+
+  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+    <button
+      className="btn btn-ghost"
+      onClick={() => {
+        const blob = new Blob(
+          [JSON.stringify(data, null, 2)],
+          { type: "application/json" }
+        );
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download =
+          "TT-Pulse-Backup-" +
+          new Date().toISOString().slice(0, 10) +
+          ".json";
+        a.click();
+        URL.revokeObjectURL(url);
+        notify("Tournament backup downloaded.");
+      }}
+    >
+      Download backup
+    </button>
+  </div>
+</section>
     </div>
   );
 }
