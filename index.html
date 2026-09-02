@@ -2489,7 +2489,7 @@ function AvailabilityTab({ data, update, notify }) {
             return (
               <button
                 key={key}
-                title={marked ? `${marked} available slot${marked === 1 ? "" : "s"}` : "No availability marked"}
+                title={marked ? `${marked} available slot${marked === 1 ? "" : "s"}` : "NOT AVAILABLE — ALL DAY"}
                 className={"cal-cell" + (marked ? " has" : "") + status + (openDay === key ? " open" : "")}
                 disabled={!playerId}
                 onClick={() => setOpenDay(openDay === key ? null : key)}
