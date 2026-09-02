@@ -6895,19 +6895,7 @@ function App() {
         </div>
         <div className="topbar-right">
           <span className={"role-chip role-" + role}>{roleLabel}</span>
-          {can(role, "super") ? (
-            <button
-              className="btn btn-ghost"
-              onClick={() => {
-                if (window.confirm("Clear every player, team, fixture and match? This cannot be undone.")) {
-                  update(() => ({ ...EMPTY, codes: data.codes }));
-                  notify("All data cleared. Your access codes were kept.");
-                }
-              }}
-            >
-              Reset all data
-            </button>
-          ) : null}
+          
           <button className="btn btn-ghost" onClick={leave}>
             Sign out
           </button>
