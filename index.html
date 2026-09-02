@@ -93,7 +93,11 @@ window.TT_CLOUD = {
       method: "POST",
       headers: {
   ...head({ Prefer: "resolution=merge-duplicates,return=representation" }),
-  Authorization: "Bearer " + (window.TT_AUTH_TOKEN || C.anonKey)
+  Authorization: "Bearer " + (
+  window.TT_AUTH_TOKEN ||
+  sessionStorage.getItem("tt_auth_token") ||
+  C.anonKey
+)
 },
       body: JSON.stringify([{ id: C.row, doc: JSON.parse(body), updated_at: new Date().toISOString() }])
     })
