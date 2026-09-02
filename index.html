@@ -6458,6 +6458,29 @@ function AccessTab({ data, update, notify }) {
     >
       Download backup
     </button>
+    <button
+  className="btn btn-danger"
+  onClick={() => {
+    const answer = window.prompt(
+      "This will remove all imported players and their availability.\n\nType CLEAR PLAYERS to continue."
+    );
+
+    if (answer !== "CLEAR PLAYERS") {
+      notify("Clear players cancelled.");
+      return;
+    }
+
+    update((d) => ({
+      ...d,
+      players: [],
+      availability: {},
+    }));
+
+    notify("Players and availability cleared. Tournament settings were preserved.");
+  }}
+>
+  Clear imported players
+</button>
   </div>
 </section>
     </div>
