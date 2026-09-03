@@ -193,13 +193,12 @@ const { useState, useEffect, useMemo, useRef } = React;
 const STORE_KEY = "tt_society_v1";
 
 const SKILLS = [
-  { key: "serve", label: "Serve", w: 0.25 },
+  { key: "serve", label: "Serve", w: 0.20 },
   { key: "forehand", label: "Forehand", w: 0.20 },
   { key: "backhand", label: "Backhand", w: 0.20 },
   { key: "rallySmash", label: "Rally / Smash", w: 0.20 },
-  { key: "temperament", label: "Temperament", w: 0.15 },
+  { key: "temperament", label: "Temperament", w: 0.20 },
 ];
-
 const CATEGORIES = [
   { key: "Male", label: "Adult Male" },
   { key: "Female", label: "Adult Female" },
@@ -2735,32 +2734,31 @@ function CalibrationTab({ data, update, tiers, notify }) {
                     <b>{s.label}</b>
                     <span className="weight">{Math.round(s.w * 100)}%</span>
                   </div>
-                  <div className="marks">
-  <input
-    type="number"
-    min="1"
-    max="5"
-    step="0.1"
-    value={Number(draft[s.key]) || ""}
-    placeholder="1.0 - 5.0"
-    onChange={(e) => {
-      const raw = e.target.value;
+                 <div className="marks rating-scale">
+  {Array.from({ length: 41 }, (_, i) => 1 + i * 0.1).map((raw) => {
+    const v = Math.round(raw * 10) / 10;
+    const major = Number.isInteger(v) || Number.isInteger(v * 2);
 
-      if (raw === "") {
-        setDraft((d) => ({ ...d, [s.key]: 0 }));
-        return;
-      }
-
-      const v = Number(raw);
-
-      if (v >= 1 && v <= 5) {
-        setDraft((d) => ({
-          ...d,
-          [s.key]: Math.round(v * 10) / 10,
-        }));
-      }
-    }}
-  />
+    return (
+      <button
+        type="button"
+        key={v}
+        className={
+          "mark rating-mark" +
+          (major ? " major" : " minor") +
+          (Number(draft[s.key]) === v ? " on" : "")
+        }
+        onClick={() =>
+          setDraft((d) => ({
+            ...d,
+            [s.key]: v,
+          }))
+        }
+      >
+        {Number.isInteger(v) ? v : v.toFixed(1)}
+      </button>
+    );
+  })}
 </div>
                   <div className="cal-row-contrib mono">
                     +{((Number(draft[s.key]) || 0) * s.w).toFixed(2)}
@@ -7295,6 +7293,38 @@ function Styles() {
 .mark { width: 36px; height: 36px; border-radius: 8px; border:1px solid var(--line-strong);
   background: var(--ink); color: var(--muted); cursor:pointer; font-family:'JetBrains Mono'; font-size: 13px; }
 .mark.on { background: var(--ball); color:#FFF6F6; border-color:var(--ball); font-weight:700; }
+
+/* Precision calibration scale */
+.rating-scale {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.rating-mark {
+  min-width: 34px;
+  padding: 6px 4px;
+}
+
+.rating-mark.major {
+  font-size: 15px;
+  font-weight: 800;
+  min-width: 42px;
+  height: 40px;
+}
+
+.rating-mark.minor {
+  font-size: 11px;
+  font-weight: 400;
+  opacity: 0.65;
+}
+
+.rating-mark.on {
+  opacity: 1;
+  font-weight: 800;
+  transform: scale(1.08);
+}
 .cal-row-contrib { text-align:right; color: var(--muted); font-size: 12.5px; }
 .total-strip { display:flex; align-items:center; justify-content:space-between; gap:18px; flex-wrap:wrap;
   margin-top: 18px; padding: 16px 18px; border-radius: 12px; background: var(--ink); }
