@@ -1997,12 +1997,22 @@ const duplicatePlayerCount = duplicateGroups.reduce(
   };
 
   const mergePossibleDuplicate = (id) => {
-    update((d) => {
-      const dup = d.players.find((p) => p.id === id);
-      if (!dup || !dup.possibleDuplicateOf) return d;
-      const master = d.players.find((p) => p.id === dup.possibleDuplicateOf);
-      if (!master) return d;
+  update((d) => {
+    const dup = d.players.find((p) => p.id === id);
+    if (!dup) return d;
 
+    let masterId = dup.possibleDuplicateOf;
+
+    // For duplicates detected from matching First Name + Last Name
+    if (!masterId) {
+      const reviewEntry = duplicatePlayers.find((p) => p.id === id);
+      masterId = reviewEntry?.possibleDuplicateOf;
+    }
+
+    if (!masterId) return d;
+
+    const master = d.players.find((p) => p.id === masterId);
+    if (!master || master.id === dup.id) return d;
       const players = d.players
         .filter((p) => p.id !== dup.id)
         .map((p) => p.id === master.id ? {
