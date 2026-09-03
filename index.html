@@ -1712,6 +1712,29 @@ function PlayersTab({ data, update, tiers, notify }) {
   const [editing, setEditing] = useState(null);
   const [q, setQ] = useState("");
   const [catFilter, setCatFilter] = useState("all");
+  // Detect possible duplicate players by First Name + Last Name
+const duplicateGroups = (() => {
+  const groups = {};
+
+  (data.players || []).forEach((p) => {
+    const first = String(p.first || "").trim().toLowerCase();
+    const last = String(p.last || "").trim().toLowerCase();
+
+    if (!first || !last) return;
+
+    const key = `${first}|${last}`;
+
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(p);
+  });
+
+  return Object.values(groups).filter((group) => group.length > 1);
+})();
+
+const duplicatePlayerCount = duplicateGroups.reduce(
+  (total, group) => total + group.length,
+  0
+);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -1935,7 +1958,33 @@ function PlayersTab({ data, update, tiers, notify }) {
     }
   };
 
-  const duplicatePlayers = data.players.filter((p) => p.possibleDuplicateOf);
+  const duplicatePlayers = (() => {
+  const alreadyFlagged = data.players.filter((p) => p.possibleDuplicateOf);
+
+  const autoDetected = [];
+
+  duplicateGroups.forEach((group) => {
+    const master = group[0];
+
+    group.slice(1).forEach((p) => {
+      if (p.possibleDuplicateOf) return;
+
+      autoDetected.push({
+        ...p,
+        possibleDuplicateOf: master.id,
+        duplicateReason: "Same first name and last name",
+      });
+    });
+  });
+
+  const seen = new Set();
+
+  return [...alreadyFlagged, ...autoDetected].filter((p) => {
+    if (seen.has(p.id)) return false;
+    seen.add(p.id);
+    return true;
+  });
+})();
 
   const keepDuplicateSeparate = (id) => {
     update((d) => ({
