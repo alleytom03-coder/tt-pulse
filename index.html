@@ -2734,31 +2734,43 @@ function CalibrationTab({ data, update, tiers, notify }) {
                     <b>{s.label}</b>
                     <span className="weight">{Math.round(s.w * 100)}%</span>
                   </div>
-                 <div className="marks rating-scale">
-  {Array.from({ length: 41 }, (_, i) => 1 + i * 0.1).map((raw) => {
-    const v = Math.round(raw * 10) / 10;
-    const major = Number.isInteger(v) || Number.isInteger(v * 2);
+               <div className="compact-rating">
+  <div className="rating-value">
+    {Number(draft[s.key]) ? Number(draft[s.key]).toFixed(1) : "—"}
+  </div>
 
-    return (
-      <button
-        type="button"
-        key={v}
-        className={
-          "mark rating-mark" +
-          (major ? " major" : " minor") +
-          (Number(draft[s.key]) === v ? " on" : "")
-        }
-        onClick={() =>
-          setDraft((d) => ({
-            ...d,
-            [s.key]: v,
-          }))
-        }
-      >
-        {Number.isInteger(v) ? v : v.toFixed(1)}
-      </button>
-    );
-  })}
+  <div className="rating-track">
+    {Array.from({ length: 41 }, (_, i) => 1 + i * 0.1).map((raw) => {
+      const v = Math.round(raw * 10) / 10;
+      const major = Number.isInteger(v) || Number.isInteger(v * 2);
+      const selected = Number(draft[s.key]) === v;
+
+      return (
+        <button
+          type="button"
+          key={v}
+          title={v.toFixed(1)}
+          className={
+            "rating-dot" +
+            (major ? " major" : "") +
+            (selected ? " selected" : "")
+          }
+          onClick={() =>
+            setDraft((d) => ({
+              ...d,
+              [s.key]: v,
+            }))
+          }
+        >
+          {major ? (
+            <span>
+              {Number.isInteger(v) ? v : v.toFixed(1)}
+            </span>
+          ) : null}
+        </button>
+      );
+    })}
+  </div>
 </div>
                   <div className="cal-row-contrib mono">
                     +{((Number(draft[s.key]) || 0) * s.w).toFixed(2)}
@@ -7295,35 +7307,63 @@ function Styles() {
 .mark.on { background: var(--ball); color:#FFF6F6; border-color:var(--ball); font-weight:700; }
 
 /* Precision calibration scale */
-.rating-scale {
+/* Compact calibration scale */
+.compact-rating {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
   align-items: center;
+  gap: 8px;
+  width: 100%;
 }
 
-.rating-mark {
-  min-width: 34px;
-  padding: 6px 4px;
-}
-
-.rating-mark.major {
-  font-size: 15px;
+.rating-value {
+  width: 34px;
+  flex: 0 0 34px;
+  font-size: 14px;
   font-weight: 800;
-  min-width: 42px;
-  height: 40px;
+  text-align: center;
 }
 
-.rating-mark.minor {
-  font-size: 11px;
-  font-weight: 400;
-  opacity: 0.65;
+.rating-track {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 1;
+  min-width: 0;
 }
 
-.rating-mark.on {
-  opacity: 1;
+.rating-dot {
+  position: relative;
+  width: 5px;
+  min-width: 5px;
+  height: 5px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: #7f8c98;
+  cursor: pointer;
+}
+
+.rating-dot.major {
+  width: 8px;
+  min-width: 8px;
+  height: 8px;
+}
+
+.rating-dot.major span {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 7px;
   font-weight: 800;
-  transform: scale(1.08);
+  white-space: nowrap;
+}
+
+.rating-dot.selected {
+  width: 13px;
+  min-width: 13px;
+  height: 13px;
+  background: #ffcc00;
 }
 .cal-row-contrib { text-align:right; color: var(--muted); font-size: 12.5px; }
 .total-strip { display:flex; align-items:center; justify-content:space-between; gap:18px; flex-wrap:wrap;
