@@ -1996,12 +1996,12 @@ const duplicatePlayerCount = duplicateGroups.reduce(
     notify("Kept as a separate player.");
   };
 
-  const mergePossibleDuplicate = (id) => {
+  const mergePossibleDuplicate = (id, detectedMasterId = null) => {
   update((d) => {
     const dup = d.players.find((p) => p.id === id);
     if (!dup) return d;
 
-    let masterId = dup.possibleDuplicateOf;
+    let masterId = dup.possibleDuplicateOf || detectedMasterId;
 
     // For duplicates detected from matching First Name + Last Name
     if (!masterId) {
@@ -2096,7 +2096,13 @@ const duplicatePlayerCount = duplicateGroups.reduce(
                       <td>{p.duplicateReason || "Similar details"}</td>
                       <td>
                         <div className="row-actions">
-                          <button className="btn btn-tiny" onClick={() => mergePossibleDuplicate(p.id)} disabled={!match}>Merge</button>
+                          <button
+  className="btn btn-tiny"
+  onClick={() => mergePossibleDuplicate(p.id, p.possibleDuplicateOf)}
+  disabled={!match}
+>
+  Merge
+</button>
                           <button className="btn btn-tiny btn-ghost" onClick={() => keepDuplicateSeparate(p.id)}>Keep separate</button>
                         </div>
                       </td>
