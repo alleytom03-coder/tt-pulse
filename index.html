@@ -2799,11 +2799,23 @@ function CalibrationTab({ data, update, tiers, notify }) {
                     <b>{s.label}</b>
                     <span className="weight">{Math.round(s.w * 100)}%</span>
                   </div>
-               <div className="compact-rating">
-  <div className="rating-value">
-    {Number(draft[s.key]) ? Number(draft[s.key]).toFixed(1) : "—"}
-  </div>
-
+<div className="marks">
+  {[1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5].map((v) => (
+    <button
+      type="button"
+      key={v}
+      className={"mark" + (Number(draft[s.key]) === v ? " on" : "")}
+      onClick={() =>
+        setDraft((d) => ({
+          ...d,
+          [s.key]: v,
+        }))
+      }
+    >
+      {v}
+    </button>
+  ))}
+</div>
   <div className="rating-track">
     {Array.from({ length: 41 }, (_, i) => 1 + i * 0.1).map((raw) => {
       const v = Math.round(raw * 10) / 10;
@@ -7373,63 +7385,6 @@ function Styles() {
 
 /* Precision calibration scale */
 /* Compact calibration scale */
-.compact-rating {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-}
-
-.rating-value {
-  width: 34px;
-  flex: 0 0 34px;
-  font-size: 14px;
-  font-weight: 800;
-  text-align: center;
-}
-
-.rating-track {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex: 1;
-  min-width: 0;
-}
-
-.rating-dot {
-  position: relative;
-  width: 5px;
-  min-width: 5px;
-  height: 5px;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: #7f8c98;
-  cursor: pointer;
-}
-
-.rating-dot.major {
-  width: 8px;
-  min-width: 8px;
-  height: 8px;
-}
-
-.rating-dot.major span {
-  position: absolute;
-  top: 10px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 7px;
-  font-weight: 800;
-  white-space: nowrap;
-}
-
-.rating-dot.selected {
-  width: 13px;
-  min-width: 13px;
-  height: 13px;
-  background: #ffcc00;
-}
 .cal-row-contrib { text-align:right; color: var(--muted); font-size: 12.5px; }
 .total-strip { display:flex; align-items:center; justify-content:space-between; gap:18px; flex-wrap:wrap;
   margin-top: 18px; padding: 16px 18px; border-radius: 12px; background: var(--ink); }
