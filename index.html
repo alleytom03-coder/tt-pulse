@@ -2816,39 +2816,7 @@ function CalibrationTab({ data, update, tiers, notify }) {
     </button>
   ))}
 </div>
-  <div className="rating-track">
-    {Array.from({ length: 41 }, (_, i) => 1 + i * 0.1).map((raw) => {
-      const v = Math.round(raw * 10) / 10;
-      const major = Number.isInteger(v) || Number.isInteger(v * 2);
-      const selected = Number(draft[s.key]) === v;
-
-      return (
-        <button
-          type="button"
-          key={v}
-          title={v.toFixed(1)}
-          className={
-            "rating-dot" +
-            (major ? " major" : "") +
-            (selected ? " selected" : "")
-          }
-          onClick={() =>
-            setDraft((d) => ({
-              ...d,
-              [s.key]: v,
-            }))
-          }
-        >
-          {major ? (
-            <span>
-              {Number.isInteger(v) ? v : v.toFixed(1)}
-            </span>
-          ) : null}
-        </button>
-      );
-    })}
-  </div>
-</div>
+  
                   <div className="cal-row-contrib mono">
                     +{((Number(draft[s.key]) || 0) * s.w).toFixed(2)}
                   </div>
