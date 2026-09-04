@@ -210,7 +210,23 @@ const CATEGORIES = [
    ask "is this a kid?" */
 const KID_CATEGORIES = ["Boy", "Girl"];
 const isKid = (g) => KID_CATEGORIES.includes(g);
-const ageGroupOf = (p) => (p && isKid(p.gender) ? "kids" : "adult");
+const ageGroupOf = (p) => {
+  if (!p) return "adult";
+
+  const raw = String(
+    p.ageGroup ||
+    p.category ||
+    p.group ||
+    ""
+  )
+    .trim()
+    .toLowerCase();
+
+  if (raw === "adult" || raw === "adults") return "adult";
+  if (raw === "kid" || raw === "kids" || raw === "child") return "kids";
+
+  return isKid(p.gender) ? "kids" : "adult";
+};
 const ageGroupMatch = (p, filter) => filter === "all" || ageGroupOf(p) === filter;
 
 const SLOTS = [
@@ -1840,8 +1856,14 @@ const duplicatePlayerCount = duplicateGroups.reduce(
         const nameKey = (f, l) => (f + "|" + l).toLowerCase().replace(/\s+/g, " ").trim();
         const thisKey = nameKey(first, last);
         const masterImport = d.players.length === 0;
-        let idx = masterImport ? -1 : players.findIndex((p) => nameKey(p.first, p.last) === thisKey);
-        if (!masterImport && idx >= 0) dupeNames.push(`${first} ${last}`.trim());
+        let idx = -1;
+        const existingSameName = players.find(
+  (p) => nameKey(p.first, p.last) === thisKey
+);
+
+if (existingSameName) {
+  dupeNames.push(`${first} ${last}`.trim());
+}
 
         const cal = blankCal();
         let hasCal = false;
@@ -1869,7 +1891,17 @@ const duplicatePlayerCount = duplicateGroups.reduce(
           };
           merged++;
         } else {
-          const incoming = { id: uid(), first, last, gender, phone, flat, cal, catSource };
+          const incoming = {
+  id: uid(),
+  first,
+  last,
+  gender,
+  agegroup: rawCat,
+  phone,
+  flat,
+  cal,
+  catSource
+};
           const maybe = players.find((p) => looksLikeSamePerson(p, incoming));
           if (maybe) {
             incoming.possibleDuplicateOf = maybe.id;
@@ -1884,7 +1916,7 @@ const duplicatePlayerCount = duplicateGroups.reduce(
         }
 
         // Availability columns on the same row, if the sheet has them.
-        const pid = players[idx >= 0 ? idx : players.length - 1].id;
+        const pid = players[players.length - 1].id;
         Object.keys(slotsByDate).forEach((date) => {
           const key = pid + "|" + date;
           const cur = availability[key] || [];
@@ -1904,6 +1936,17 @@ const duplicatePlayerCount = duplicateGroups.reduce(
         Boy: players.filter((p) => p.gender === "Boy").length,
         Girl: players.filter((p) => p.gender === "Girl").length,
       };
+      const adultCount = players.filter(
+  (p) => ageGroupOf(p) === "adult"
+).length;
+
+const kidsCount = players.filter(
+  (p) => ageGroupOf(p) === "kids"
+).length;
+
+const duplicateReviewCount = players.filter(
+  (p) => p.possibleDuplicateOf
+).length;
       window.__ttLastImportCounts = finalCounts;
       return { ...d, players, availability, availabilityStart: effectiveStart, availabilityEnd: effectiveEnd };
     });
@@ -1930,31 +1973,24 @@ const duplicatePlayerCount = duplicateGroups.reduce(
       const fromFile = cats.filter((c) => c.src === "file").length;
       const unknown = cats.filter((c) => c.src === "default").length;
       notify(
-        `${objs.length} rows read → ${added} added, ${merged} matched an existing player` +
-          (skipped ? `, ${skipped} had no name` : "") +
-          `. Adult Male ${men}, Adult Female ${women}, Kids Male ${boys}, Kids Female ${girls}. ` +
-          (availRows
-            ? `Availability read for ${availRows} player-days. `
-            : `No availability was detected in the imported rows. `) +
-          (inferredYear !== currentYear
-            ? `Tournament year automatically changed from ${currentYear} to ${inferredYear}. `
-            : `Tournament year detected as ${inferredYear}. `) +
-          (possibleDupes
-            ? `${possibleDupes} possible duplicate ${possibleDupes === 1 ? "entry needs" : "entries need"} review. `
-            : "") +
-          (dupeNames.length
-            ? `${dupeNames.length} duplicate ${dupeNames.length === 1 ? "name" : "names"} folded into one: ` +
-              dupeNames.slice(0, 6).join(", ") +
-              (dupeNames.length > 6 ? ` and ${dupeNames.length - 6} more. ` : ". ")
-            : "") +
-          (mode === "detected" ? `Columns detected: ${(headers || []).join(", ")}. ` : "") +
-          (fromFile
-            ? "Read from your file."
-            : `Guessed from first names; ${unknown} could not be matched. Filter to Needs review to fix those.`) +
-          (window.__ttLastImportCounts
-            ? ` Final roll: Adult Male ${window.__ttLastImportCounts.Male}, Adult Female ${window.__ttLastImportCounts.Female}, Kids Male ${window.__ttLastImportCounts.Boy}, Kids Female ${window.__ttLastImportCounts.Girl}. Total ${window.__ttLastImportCounts.Male + window.__ttLastImportCounts.Female + window.__ttLastImportCounts.Boy + window.__ttLastImportCounts.Girl}.`
-            : "")
-      );
+  `${objs.length} rows read → ${added} players added` +
+    (skipped ? `, ${skipped} had no name` : "") +
+    `. Total players: ${players.length}. ` +
+    `Adults: ${adultCount}. Kids: ${kidsCount}. ` +
+    `Adult Male: ${finalCounts.Male}. Adult Female: ${finalCounts.Female}. ` +
+    `Kids Male: ${finalCounts.Boy}. Kids Female: ${finalCounts.Girl}. ` +
+    (duplicateReviewCount
+      ? `⚠ ${duplicateReviewCount} possible duplicate ${
+          duplicateReviewCount === 1 ? "entry" : "entries"
+        } to review — choose Merge or Keep separate. `
+      : `No possible duplicates detected. `) +
+    (availRows
+      ? `Availability read for ${availRows} player-days. `
+      : `No availability was detected in the imported rows. `) +
+    (inferredYear !== currentYear
+      ? `Tournament year automatically changed from ${currentYear} to ${inferredYear}.`
+      : `Tournament year detected as ${inferredYear}.`)
+);
     }
   };
 
