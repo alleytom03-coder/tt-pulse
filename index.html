@@ -6661,6 +6661,88 @@ function AccessTab({ data, update, notify }) {
     >
       Download backup
     </button>
+    <input
+  id="tt-restore-backup"
+  type="file"
+  accept=".json,application/json"
+  style={{ display: "none" }}
+  onChange={(e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      try {
+        const restored = JSON.parse(reader.result);
+
+        if (
+          !restored ||
+          typeof restored !== "object" ||
+          !Array.isArray(restored.players)
+        ) {
+          notify("This does not appear to be a valid TT Pulse backup.");
+          e.target.value = "";
+          return;
+        }
+
+        const playerCount = restored.players.length;
+
+        const answer = window.prompt(
+          `TT Pulse backup found.\n\n` +
+          `Players: ${playerCount}\n` +
+          `Tournament: ${restored.tournamentName || "TT Pulse"}\n\n` +
+          `Restoring will replace the CURRENT tournament data.\n\n` +
+          `Type RESTORE to continue.`
+        );
+
+        if (answer !== "RESTORE") {
+          notify("Restore cancelled.");
+          e.target.value = "";
+          return;
+        }
+
+        // Safety copy of the CURRENT state before replacing it
+        const safetyBlob = new Blob(
+          [JSON.stringify(data, null, 2)],
+          { type: "application/json" }
+        );
+
+        const safetyUrl = URL.createObjectURL(safetyBlob);
+        const a = document.createElement("a");
+        a.href = safetyUrl;
+        a.download =
+          "TT-Pulse-Before-Restore-" +
+          new Date().toISOString().slice(0, 10) +
+          ".json";
+        a.click();
+        URL.revokeObjectURL(safetyUrl);
+
+        update(() => restored);
+
+        notify(
+          `Backup restored successfully. ${playerCount} players restored.`
+        );
+
+        e.target.value = "";
+      } catch (err) {
+        console.error("Backup restore failed:", err);
+        notify("Restore failed. The selected file is not a valid TT Pulse backup.");
+        e.target.value = "";
+      }
+    };
+
+    reader.readAsText(file);
+  }}
+/>
+    <button
+  className="btn btn-ghost"
+  onClick={() => {
+    document.getElementById("tt-restore-backup")?.click();
+  }}
+>
+  Restore backup
+</button>
     <button
   className="btn btn-danger"
   onClick={() => {
