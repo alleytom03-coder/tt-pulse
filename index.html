@@ -2914,14 +2914,25 @@ function CalibrationTab({ data, update, tiers, notify }) {
 function TiersTab({ data, update, tiers, notify }) {
   const [ageFilter, setAgeFilter] = useState("all");
   const teamCount = (data.teams || []).length;
-  const visibleCategories = CATEGORIES.filter((c) =>
-    ageFilter === "all" || (ageFilter === "kids" ? isKid(c.key) : !isKid(c.key))
-  );
+ const visibleCategories = [
+  { key: "Male", label: "Adult Male", type: "adult" },
+  { key: "Female", label: "Adult Female", type: "adult" },
+  { key: "Kids", label: "Kids Mixed", type: "kids" },
+].filter(
+  (c) =>
+    ageFilter === "all" ||
+    ageFilter === c.type
+);
   const columns = ["Category", "Tier", "First Name", "Last Name", "Total Score", "Rank in Category"];
   const rows = [];
   visibleCategories.forEach((c) => {
     data.players
-      .filter((p) => p.gender === c.key && tiers[p.id])
+      .filter((p) =>
+  (c.key === "Kids"
+    ? ageGroupOf(p) === "kids"
+    : ageGroupOf(p) === "adult" && p.gender === c.key) &&
+  tiers[p.id]
+)
       .sort((a, b) => tiers[a.id].rank - tiers[b.id].rank)
       .forEach((p) => {
         rows.push([c.label, tiers[p.id].tier, p.first, p.last, calScore(p).toFixed(2), tiers[p.id].rank]);
@@ -2997,7 +3008,7 @@ function TiersTab({ data, update, tiers, notify }) {
 
         <div className="grid-form">
           {(data.tierByTeams !== false
-            ? visibleCategories.filter((c) => isKid(c.key))
+            ? visibleCategories.filter((c) => c.key === "Kids")
             : visibleCategories).map((c) => (
             <Field key={c.key} label={c.label}>
               <select
@@ -3022,7 +3033,12 @@ function TiersTab({ data, update, tiers, notify }) {
 
       {visibleCategories.map((c) => {
         const group = data.players
-          .filter((p) => p.gender === c.key && tiers[p.id])
+          .filter((p) =>
+  (c.key === "Kids"
+    ? ageGroupOf(p) === "kids"
+    : ageGroupOf(p) === "adult" && p.gender === c.key) &&
+  tiers[p.id]
+)
           .sort((a, b) => tiers[a.id].rank - tiers[b.id].rank);
         const byTier = {};
         group.forEach((p) => {
