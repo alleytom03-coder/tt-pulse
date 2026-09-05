@@ -399,54 +399,69 @@ const isMorning = (slot) => /AM/.test(slot || "");
 /* Players in each category are ranked by calibration score and
    split into as-equal-as-possible tiers. Tier 1 is strongest. */
 function computeTiers(players, tierCounts, tierSize) {
-  const map = {}; // playerId -> { tier, rank, total }
-  CATEGORIES.forEach((cat) => {
-    const group = players
-      .filter((p) => p.gender === cat.key)
+  const map = {}; // playerId -> { tier, rank, total, category }
+
+  // Tier bucket size = number of teams.
+  // Example: 4 teams = 4 players in every complete tier.
+  const bucketSize = Math.max(1, Number(tierSize) || 1);
+
+  const groups = [
+    {
+      key: "Male",
+      label: "Adult Male",
+      players: players.filter(
+        (p) => ageGroupOf(p) === "adult" && p.gender === "Male"
+      ),
+    },
+    {
+      key: "Female",
+      label: "Adult Female",
+      players: players.filter(
+        (p) => ageGroupOf(p) === "adult" && p.gender === "Female"
+      ),
+    },
+    {
+      key: "Kids",
+      label: "Kids Mixed",
+      players: players.filter(
+        (p) => ageGroupOf(p) === "kids"
+      ),
+    },
+  ];
+
+  groups.forEach((groupInfo) => {
+    const group = groupInfo.players
       .slice()
       .sort((a, b) => {
-        const d = calScore(b) - calScore(a);
-        if (d !== 0) return d;
+        // Strongest calibration rating first
+        const scoreDiff = calScore(b) - calScore(a);
+        if (scoreDiff !== 0) return scoreDiff;
+
+        // Stable tie-break when ratings are equal
         return fullName(a).localeCompare(fullName(b));
       });
-    const n = group.length;
-    if (!n) return;
 
-    // For the team categories, a tier holds exactly one player per team, so
-    // the strongest N go in tier 1, the next N in tier 2, and so on. Juniors
-    // are not drafted, so they keep the tier count set on the Tiers tab.
-    const byTeams = tierSize > 0 && TEAM_CATEGORIES.includes(cat.key);
-    if (byTeams) {
-      let idx = 0;
-      let tier = 1;
-      while (idx < n) {
-        for (let k = 0; k < tierSize && idx < n; k++) {
-          map[group[idx].id] = { tier, rank: idx + 1, total: n, category: cat.key };
-          idx++;
-        }
-        tier++;
-      }
-      return;
-    }
+    const total = group.length;
 
-    const t = Math.max(1, Number(tierCounts[cat.key]) || 1);
-    const tiers = Math.min(t, Math.max(1, n));
-    const base = Math.floor(n / tiers);
-    const rem = n % tiers;
-    let idx = 0;
-    for (let tier = 1; tier <= tiers; tier++) {
-      const size = base + (tier <= rem ? 1 : 0);
-      for (let k = 0; k < size; k++) {
-        const p = group[idx];
-        if (!p) break;
-        map[p.id] = { tier, rank: idx + 1, total: n, category: cat.key };
-        idx++;
-      }
-    }
+    group.forEach((player, index) => {
+      // 4 teams:
+      // ranks 1-4   = Tier 1
+      // ranks 5-8   = Tier 2
+      // ranks 9-12  = Tier 3
+      // etc.
+      const tier = Math.floor(index / bucketSize) + 1;
+
+      map[player.id] = {
+        tier,
+        rank: index + 1,
+        total,
+        category: groupInfo.key,
+      };
+    });
   });
+
   return map;
 }
-
 const POINTS_TO_WIN_SET = 11;
 
 const num = (v) => (v === "" || v == null ? 0 : Number(v) || 0);
