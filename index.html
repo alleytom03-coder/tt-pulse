@@ -410,22 +410,30 @@ function computeTiers(players, tierCounts, tierSize) {
       key: "Male",
       label: "Adult Male",
       players: players.filter(
-        (p) => ageGroupOf(p) === "adult" && p.gender === "Male"
-      ),
+  (p) =>
+    ageGroupOf(p) === "adult" &&
+    p.gender === "Male" &&
+    isCalibrated(p)
+),
     },
     {
       key: "Female",
       label: "Adult Female",
       players: players.filter(
-        (p) => ageGroupOf(p) === "adult" && p.gender === "Female"
-      ),
+  (p) =>
+    ageGroupOf(p) === "adult" &&
+    p.gender === "Female" &&
+    isCalibrated(p)
+),
     },
     {
       key: "Kids",
       label: "Kids Mixed",
       players: players.filter(
-        (p) => ageGroupOf(p) === "kids"
-      ),
+  (p) =>
+    ageGroupOf(p) === "kids" &&
+    isCalibrated(p)
+),
     },
   ];
 
