@@ -3077,14 +3077,20 @@ function TiersTab({ data, update, tiers, notify }) {
                       </div>
                       <ul>
                         {byTier[t].map((p) => (
-                          <li key={p.id}>
-                            <span>{fullName(p)}</span>
-                            <b className="mono">{calScore(p).toFixed(2)}</b>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  ))}
+  <li key={p.id}>
+    <span>{fullName(p)}</span>
+    <b className="mono">{calScore(p).toFixed(2)}</b>
+  </li>
+))}
+
+{Array.from({
+  length: Math.max(0, bucketSize - byTier[t].length),
+}).map((_, i) => (
+  <li key={`empty-${t}-${i}`}>
+    <span className="muted">Empty slot</span>
+    <b className="mono">—</b>
+  </li>
+))}
               </div>
             )}
           </section>
