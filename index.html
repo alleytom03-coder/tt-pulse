@@ -1499,8 +1499,13 @@ function inferRecords(rows) {
 
 /* Header mode when the headers are usable, content mode otherwise. */
 function buildRecords(rows) {
-  if (!rows.length) return { records: [], headers: [], mode: "none" };
+  // Ignore completely blank rows before detecting headers or data
+  rows = (rows || []).filter((row) =>
+    Array.isArray(row) &&
+    row.some((cell) => String(cell ?? "").trim() !== "")
+  );
 
+  if (!rows.length) return { records: [], headers: [], mode: "none" };
   const byHeader = rowsToObjects(rows);
   const named = byHeader.records.filter((o) => {
     const n = readName(o);
