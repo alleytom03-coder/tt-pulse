@@ -410,23 +410,23 @@ function computeTiers(players, tierCounts, tierSize) {
       key: "Male",
       label: "Adult Male",
       players: players.filter(
-  (p) =>
-    ageGroupOf(p) === "adult" &&
-    p.gender === "Male" &&
-    isCalibrated(p)
-),
+        (p) => ageGroupOf(p) === "adult" && p.gender === "Male"
+      ),
     },
-    players: players.filter(
-  (p) =>
-    ageGroupOf(p) === "adult" &&
-    p.gender === "Female" &&
-    isCalibrated(p)
-),
-    players: players.filter(
-  (p) =>
-    ageGroupOf(p) === "kids" &&
-    isCalibrated(p)
-),
+    {
+      key: "Female",
+      label: "Adult Female",
+      players: players.filter(
+        (p) => ageGroupOf(p) === "adult" && p.gender === "Female"
+      ),
+    },
+    {
+      key: "Kids",
+      label: "Kids Mixed",
+      players: players.filter(
+        (p) => ageGroupOf(p) === "kids"
+      ),
+    },
   ];
 
   groups.forEach((groupInfo) => {
@@ -3012,143 +3012,50 @@ function TiersTab({ data, update, tiers, notify }) {
         </div>
       </section>
 
-      {[
-  {
-    key: "AdultMale",
-    label: "Adult Male",
-    type: "adult",
-    players: data.players.filter(
-      (p) =>
-        ageGroupOf(p) === "adult" &&
-        p.gender === "Male" &&
-        tiers[p.id]
-    ),
-  },
-  {
-    key: "AdultFemale",
-    label: "Adult Female",
-    type: "adult",
-    players: data.players.filter(
-      (p) =>
-        ageGroupOf(p) === "adult" &&
-        p.gender === "Female" &&
-        tiers[p.id]
-    ),
-  },
-  {
-    key: "Kids",
-    label: "Kids Mixed",
-    type: "kids",
-    players: data.players.filter(
-      (p) =>
-        ageGroupOf(p) === "kids" &&
-        tiers[p.id]
-    ),
-  },
-]
-  .filter(
-    (g) =>
-      ageFilter === "all" ||
-      ageFilter === g.type
-  )
-  .map((g) => {
-    const group = g.players
-      .slice()
-      .sort(
-        (a, b) =>
-          tiers[a.id].rank - tiers[b.id].rank
-      );
-
-    const byTier = {};
-
-    group.forEach((p) => {
-      const t = tiers[p.id].tier;
-      byTier[t] = byTier[t] || [];
-      byTier[t].push(p);
-    });
-
-    const bucketSize = Math.max(1, teamCount);
-
-    return (
-      <section className="card" key={g.key}>
-        <header className="card-head">
-          <div>
-            <h2>{g.label}</h2>
-            <span className="muted">
-              {group.length} calibrated players
-            </span>
-          </div>
-        </header>
-
-        {group.length === 0 ? (
-          <Empty
-            title={`No calibrated ${g.label.toLowerCase()} players yet`}
-            body="Players will enter the tier buckets automatically after calibration."
-          />
-        ) : (
-          <div className="tier-cols">
-            {Object.keys(byTier)
-              .map(Number)
-              .sort((a, b) => a - b)
-              .map((t) => {
-                const count = byTier[t].length;
-                const short = Math.max(0, bucketSize - count);
-
-                return (
-                  <div className="tier-col" key={t}>
-                    <div
-                      className={
-                        "tier-col-head tier-" +
-                        Math.min(t, 5)
-                      }
-                    >
-                      <div>
+      {visibleCategories.map((c) => {
+        const group = data.players
+          .filter((p) => p.gender === c.key && tiers[p.id])
+          .sort((a, b) => tiers[a.id].rank - tiers[b.id].rank);
+        const byTier = {};
+        group.forEach((p) => {
+          const t = tiers[p.id].tier;
+          byTier[t] = byTier[t] || [];
+          byTier[t].push(p);
+        });
+        return (
+          <section className="card" key={c.key}>
+            <header className="card-head">
+              <h2>{c.label}</h2>
+              <span className="muted">{group.length} players</span>
+            </header>
+            {group.length === 0 ? (
+              <Empty title={`No ${c.label.toLowerCase()} yet`} body="Add players in the Players tab." />
+            ) : (
+              <div className="tier-cols">
+                {Object.keys(byTier)
+                  .map(Number)
+                  .sort((a, b) => a - b)
+                  .map((t) => (
+                    <div className="tier-col" key={t}>
+                      <div className={"tier-col-head tier-" + Math.min(t, 5)}>
                         <b>Tier {t}</b>
-
-                        <div className="muted">
-                          {count}/{bucketSize}
-                          {short === 0
-                            ? " ✓ Full"
-                            : ` — Short by ${short}`}
-                        </div>
+                        <span>{byTier[t].length}</span>
                       </div>
-
-                      <span>{count}</span>
+                      <ul>
+                        {byTier[t].map((p) => (
+                          <li key={p.id}>
+                            <span>{fullName(p)}</span>
+                            <b className="mono">{calScore(p).toFixed(2)}</b>
+                          </li>
+                        ))}
+                      </ul>
                     </div>
-
-                    <ul>
-                      {byTier[t].map((p) => (
-                        <li key={p.id}>
-                          <span>
-                            #{tiers[p.id].rank}{" "}
-                            {fullName(p)}
-                          </span>
-
-                          <b className="mono">
-                            {calScore(p).toFixed(2)}
-                          </b>
-                        </li>
-                      ))}
-
-                      {Array.from({
-                        length: short,
-                      }).map((_, i) => (
-                        <li key={`empty-${t}-${i}`}>
-                          <span className="muted">
-                            Empty slot
-                          </span>
-                          <b className="mono">—</b>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                );
-              })}
-          </div>
-        )}
-      </section>
-    );
-  })}
+                  ))}
+              </div>
+            )}
+          </section>
+        );
+      })}
     </div>
   );
 }
