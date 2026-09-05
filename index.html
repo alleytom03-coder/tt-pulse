@@ -3046,6 +3046,7 @@ function TiersTab({ data, update, tiers, notify }) {
           byTier[t] = byTier[t] || [];
           byTier[t].push(p);
         });
+      const bucketSize = Math.max(1, teamCount);
         return (
           <section className="card" key={c.key}>
             <header className="card-head">
@@ -3062,8 +3063,17 @@ function TiersTab({ data, update, tiers, notify }) {
                   .map((t) => (
                     <div className="tier-col" key={t}>
                       <div className={"tier-col-head tier-" + Math.min(t, 5)}>
-                        <b>Tier {t}</b>
-                        <span>{byTier[t].length}</span>
+                        <div>
+  <b>Tier {t}</b>
+  <div className="muted">
+    {byTier[t].length}/{bucketSize}
+    {byTier[t].length === bucketSize
+      ? " ✓ Full"
+      : ` — Short by ${bucketSize - byTier[t].length}`}
+  </div>
+</div>
+
+<span>{byTier[t].length}</span>
                       </div>
                       <ul>
                         {byTier[t].map((p) => (
