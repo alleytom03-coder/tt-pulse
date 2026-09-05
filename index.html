@@ -7169,7 +7169,7 @@ function App() {
     });
   };
 
-  const tierSize = data.tierByTeams === false ? 0 : (data.teams || []).length;
+  const tierSize = (data.teams || []).length;
   const tiers = useMemo(
     () => computeTiers(data.players, data.tierCounts, tierSize),
     [data.players, data.tierCounts, tierSize]
