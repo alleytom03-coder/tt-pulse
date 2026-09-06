@@ -58,7 +58,27 @@
 
    Then paste the project URL and the public anon key below.
    ================================================================== */
-async function saveCalibrationToSupabase(playerId, cal) {
+async function loadCalibrationsFromSupabase() {
+  const C = window.TT_CLOUD;
+
+  const response = await fetch(
+    C.url.replace(/\/+$/, "") +
+      "/rest/v1/tt_calibrations?select=player_id,serve,forehand,backhand,rally_smash,temperament,final_score",
+    {
+      headers: {
+        apikey: C.anonKey,
+        Authorization: "Bearer " + C.anonKey
+      }
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error("Could not load calibrations: " + response.status);
+  }
+
+  return response.json();
+}
+  async function saveCalibrationToSupabase(playerId, cal) {
   const C = window.TT_CLOUD;
 
   const token =
