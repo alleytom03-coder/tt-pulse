@@ -1841,7 +1841,7 @@ const duplicatePlayerCount = duplicateGroups.reduce(
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
-  const save = () => {
+  const save = async () => {
     if (!form.first.trim()) {
       notify("A first name is needed to add a player.");
       return;
@@ -2797,6 +2797,9 @@ function CalibrationTab({ data, update, tiers, notify }) {
     return;
   }
 
+ try {
+  await saveCalibrationToSupabase(player.id, draft);
+
   update((d) => ({
     ...d,
     players: d.players.map((p) =>
@@ -2805,6 +2808,9 @@ function CalibrationTab({ data, update, tiers, notify }) {
   }));
 
   notify(`Calibration saved for ${fullName(player)}.`);
+} catch (err) {
+  notify(err.message || "Calibration save failed.");
+}
 };
 
   const columns = [
