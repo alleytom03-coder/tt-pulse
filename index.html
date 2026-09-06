@@ -7294,34 +7294,12 @@ function App() {
         }
       } catch (e) {
         /* first run — no saved data */
-      }
-      const next = { ...EMPTY, ...(saved || {}) };
-      // Merge tier counts so the two new junior categories always have one.
-      next.tierCounts = { ...EMPTY.tierCounts, ...(next.tierCounts || {}) };
-      delete next.tierCounts.Kid;
-      // Anyone saved under the old single "Kid" category is split by first name.
-      if (Array.isArray(next.players)) {
-        next.players = next.players.map((p) => {
-          if (p.gender !== "Kid") return p;
-          const g = guessGenderFromName(p.first);
-          return { ...p, gender: g === "Female" ? "Girl" : "Boy", catSource: "guess" };
-        });
-      }
-      if (!next.tournamentName || /society table tennis/i.test(next.tournamentName)) {
-        next.tournamentName = "TT Pulse";
-      }
-      if (!next.codes) {
-        next.codes = freshCodes();
-        try {
-          await window.storage.set(STORE_KEY, JSON.stringify(next));
-        } catch (e) {
-          /* nothing to do */
-        }
-      }
-      try {
+      }try {
+  const playerRows = await loadPlayersFromSupabase();
   const calibrationRows = await loadCalibrationsFromSupabase();
 
   const calByPlayer = {};
+
   calibrationRows.forEach((c) => {
     calByPlayer[c.player_id] = {
       serve: Number(c.serve),
@@ -7332,13 +7310,18 @@ function App() {
     };
   });
 
-  next.players = (next.players || []).map((p) =>
-    calByPlayer[p.id]
-      ? { ...p, cal: calByPlayer[p.id] }
-      : p
-  );
+  next.players = playerRows.map((p) => ({
+    id: p.id,
+    first: p.first_name || "",
+    last: p.last_name || "",
+    phone: p.phone || "",
+    gender: p.gender || "",
+    ageGroup: p.age_group || "",
+    flat: p.flat_no || "",
+    cal: calByPlayer[p.id] || {}
+  }));
 } catch (e) {
-  console.error("Calibration load failed:", e);
+  console.error("Player/calibration load failed:", e);
 }
 
 setData(next);
