@@ -3587,7 +3587,51 @@ function TeamsTab({ data, update, tiers, notify }) {
         note="Imports keep Adult and Kids teams separate. A player can only belong to one team."
         notify={notify}
       />
+<section className="card">
+  <header className="card-head">
+    <div>
+      <span className="eyebrow">Planning</span>
+      <h2>Team Readiness</h2>
+    </div>
+    <span className="badge">Suggested teams: {suggestedTeams}</span>
+  </header>
 
+  <div className="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Group</th>
+          <th>Total</th>
+          <th>Calibrated</th>
+          <th>Pending</th>
+          <th>Complete tiers</th>
+          <th>Current tier</th>
+        </tr>
+      </thead>
+
+      <tbody>
+        {readinessGroups.map((g) => (
+          <tr key={g.key}>
+            <td className="strong">{g.label}</td>
+            <td>{g.total}</td>
+            <td>{g.calibrated}</td>
+            <td>{g.pending}</td>
+            <td>{g.completeTiers}</td>
+            <td>
+              {g.remainder === 0
+                ? "✓ Full"
+                : `${g.remainder}/${suggestedTeams} — Short by ${g.shortBy}`}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+
+  <p className="muted" style={{ marginTop: 12 }}>
+    Preview only. No players are assigned to teams from this panel.
+  </p>
+</section>
       <section className="card">
         <header className="card-head">
           <h2>Add a new {groupLabel} team</h2>
