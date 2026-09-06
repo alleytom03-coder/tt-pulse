@@ -399,10 +399,7 @@ const isMorning = (slot) => /AM/.test(slot || "");
 /* Players in each category are ranked by calibration score and
    split into as-equal-as-possible tiers. Tier 1 is strongest. */
  function suggestTeamCount(players) {
-  const calibrated = players.filter((p) => isCalibrated(p));
-
-  const total = calibrated.length;
-
+  const total = players.length;
   if (total < 2) return 1;
 
   const targetTeamSize = 30;
