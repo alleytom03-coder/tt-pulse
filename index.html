@@ -58,7 +58,27 @@
 
    Then paste the project URL and the public anon key below.
    ================================================================== */
-async function loadCalibrationsFromSupabase() {
+async function loadPlayersFromSupabase() {
+  const C = window.TT_CLOUD;
+
+  const response = await fetch(
+    C.url.replace(/\/+$/, "") +
+      "/rest/v1/tt_players?select=id,first_name,last_name,phone,gender,age_group,flat_no",
+    {
+      headers: {
+        apikey: C.anonKey,
+        Authorization: "Bearer " + C.anonKey
+      }
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error("Could not load players: " + response.status);
+  }
+
+  return response.json();
+}
+  async function loadCalibrationsFromSupabase() {
   const C = window.TT_CLOUD;
 
   const response = await fetch(
