@@ -2873,7 +2873,7 @@ function CalibrationTab({ data, update, tiers, notify }) {
                     <b>{s.label}</b>
                     <span className="weight">{Math.round(s.w * 100)}%</span>
                   </div>
-<div className="marks">
+<div className="marks" style={{ marginLeft: "8px", flex: "0 0 auto" }}>
  <select
   value={draft[s.key] || ""}
   onChange={(e) =>
