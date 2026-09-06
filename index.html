@@ -2784,7 +2784,7 @@ function CalibrationTab({ data, update, tiers, notify }) {
 
   const total = SKILLS.reduce((s, k) => s + (Number(draft[k.key]) || 0) * k.w, 0);
 
-  const save = () => {
+  const save = async () => {
   if (!player) return;
 
   const invalid = SKILLS.find((s) => {
