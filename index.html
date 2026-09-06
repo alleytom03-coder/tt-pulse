@@ -7349,7 +7349,32 @@ setData(next);
         if (res && res.stamp) mark.current = res.stamp;
         if (res && res.value && res.value !== stamp.current) {
           stamp.current = res.value;
-          setData({ ...EMPTY, ...JSON.parse(res.value) });
+          const fresh = { ...EMPTY, ...JSON.parse(res.value) };
+
+try {
+  const calibrationRows = await loadCalibrationsFromSupabase();
+
+  const calByPlayer = {};
+  calibrationRows.forEach((c) => {
+    calByPlayer[c.player_id] = {
+      serve: Number(c.serve),
+      forehand: Number(c.forehand),
+      backhand: Number(c.backhand),
+      rallySmash: Number(c.rally_smash),
+      temperament: Number(c.temperament)
+    };
+  });
+
+  fresh.players = (fresh.players || []).map((p) =>
+    calByPlayer[p.id]
+      ? { ...p, cal: calByPlayer[p.id] }
+      : p
+  );
+} catch (e) {
+  console.error("Calibration refresh failed:", e);
+}
+
+setData(fresh);
         }
       } catch (e) {
         /* nothing saved yet */
