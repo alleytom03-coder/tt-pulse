@@ -58,7 +58,57 @@
 
    Then paste the project URL and the public anon key below.
    ================================================================== */
-window.TT_CLOUD = {
+async function saveCalibrationToSupabase(playerId, cal) {
+  const C = window.TT_CLOUD;
+
+  const token =
+    window.TT_AUTH_TOKEN ||
+    sessionStorage.getItem("tt_auth_token");
+
+  if (!token) {
+    throw new Error("Please log in again as Super Admin.");
+  }
+
+  const serve = Number(cal.serve || 0);
+  const forehand = Number(cal.forehand || 0);
+  const backhand = Number(cal.backhand || 0);
+  const rallySmash = Number(cal.rallySmash || 0);
+  const temperament = Number(cal.temperament || 0);
+
+  const finalScore =
+    (serve + forehand + backhand + rallySmash + temperament) / 5;
+
+  const response = await fetch(
+    C.url.replace(/\/+$/, "") + "/rest/v1/tt_calibrations?on_conflict=player_id",
+    {
+      method: "POST",
+      headers: {
+        apikey: C.anonKey,
+        Authorization: "Bearer " + token,
+        "Content-Type": "application/json",
+        Prefer: "resolution=merge-duplicates,return=representation"
+      },
+      body: JSON.stringify([{
+        player_id: playerId,
+        serve,
+        forehand,
+        backhand,
+        rally_smash: rallySmash,
+        temperament,
+        final_score: finalScore,
+        calibrated_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      }])
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error("Calibration database save failed: " + response.status);
+  }
+
+  return response.json();
+}
+  window.TT_CLOUD = {
   url: "https://zqveemyynobxwlwybdqh.supabase.co",              // e.g. "https://abcdefgh.supabase.co"
   anonKey: "sb_publishable_xjFBq5JYgI0QQRmwNnto-w_0RQ0Ak0e",          // the public anon key from Project settings > API
   table: "tt_state",
