@@ -413,12 +413,8 @@ function computeTiers(players, tierCounts, tierSize) {
 
   // Tier bucket size = number of teams.
   // Example: 4 teams = 4 players in every complete tier.
-  const suggestedTeams = suggestTeamCount(players);
-const bucketSize = Math.max(
-  1,
-  Number(tierSize) || suggestedTeams
-);
-
+ const suggestedTeams = suggestTeamCount(players);
+const bucketSize = Math.max(1, suggestedTeams);
   const groups = [
     {
       key: "Male",
