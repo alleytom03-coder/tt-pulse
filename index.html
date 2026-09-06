@@ -3619,8 +3619,8 @@ function TeamsTab({ data, update, tiers, notify }) {
             <td>{g.completeTiers}</td>
             <td>
               {g.remainder === 0
-                ? "✓ Full"
-                : `${g.remainder}/${suggestedTeams} — Short by ${g.shortBy}`}
+  ? `${g.completeTiers} complete tier${g.completeTiers === 1 ? "" : "s"}`
+  : `${g.completeTiers} complete + Tier ${g.completeTiers + 1}: ${g.remainder}/${suggestedTeams}`}
             </td>
           </tr>
         ))}
