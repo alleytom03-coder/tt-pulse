@@ -2874,21 +2874,22 @@ function CalibrationTab({ data, update, tiers, notify }) {
                     <span className="weight">{Math.round(s.w * 100)}%</span>
                   </div>
 <div className="marks">
+ <select
+  value={draft[s.key] || ""}
+  onChange={(e) =>
+    setDraft((d) => ({
+      ...d,
+      [s.key]: Number(e.target.value),
+    }))
+  }
+>
+  <option value="">Select</option>
   {[1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5].map((v) => (
-    <button
-      type="button"
-      key={v}
-      className={"mark" + (Number(draft[s.key]) === v ? " on" : "")}
-      onClick={() =>
-        setDraft((d) => ({
-          ...d,
-          [s.key]: v,
-        }))
-      }
-    >
+    <option key={v} value={v}>
       {v}
-    </button>
+    </option>
   ))}
+</select>
 </div>
   
                   <div className="cal-row-contrib mono">
