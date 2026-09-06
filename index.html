@@ -2868,7 +2868,17 @@ function CalibrationTab({ data, update, tiers, notify }) {
           <>
             <div className="cal-rows">
               {SKILLS.map((s) => (
-                <div className="cal-row" key={s.key}>
+                <div
+  className="cal-row"
+  key={s.key}
+  style={{
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    gap: "10px",
+    flexWrap: "wrap",
+  }}
+>
                   <div className="cal-row-name">
                     <b>{s.label}</b>
                     <span className="weight">{Math.round(s.w * 100)}%</span>
