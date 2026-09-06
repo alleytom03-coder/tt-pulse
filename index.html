@@ -3091,7 +3091,10 @@ function TiersTab({ data, update, tiers, notify }) {
           byTier[t] = byTier[t] || [];
           byTier[t].push(p);
         });
-      const bucketSize = Math.max(1, teamCount);
+      const bucketSize = Math.max(
+  1,
+  teamCount || suggestTeamCount(data.players)
+);
         return (
           <section className="card" key={c.key}>
             <header className="card-head">
