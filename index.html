@@ -398,12 +398,57 @@ const isMorning = (slot) => /AM/.test(slot || "");
 /* ---------- tiers ---------- */
 /* Players in each category are ranked by calibration score and
    split into as-equal-as-possible tiers. Tier 1 is strongest. */
+  function suggestTeamCount(players) {
+  const calibrated = players.filter((p) => isCalibrated(p));
+
+  const adultMale = calibrated.filter(
+    (p) => ageGroupOf(p) === "adult" && p.gender === "Male"
+  ).length;
+
+  const adultFemale = calibrated.filter(
+    (p) => ageGroupOf(p) === "adult" && p.gender === "Female"
+  ).length;
+
+  const kidsMixed = calibrated.filter(
+    (p) => ageGroupOf(p) === "kids"
+  ).length;
+
+  const counts = [adultMale, adultFemale, kidsMixed].filter((n) => n > 0);
+
+  if (!counts.length) return 1;
+
+  let bestTeams = 2;
+  let bestPenalty = Infinity;
+
+  for (let teams = 2; teams <= 8; teams++) {
+    let penalty = 0;
+
+    counts.forEach((count) => {
+      const remainder = count % teams;
+
+      if (remainder !== 0) {
+        penalty += teams - remainder;
+      }
+    });
+
+    if (penalty < bestPenalty) {
+      bestPenalty = penalty;
+      bestTeams = teams;
+    }
+  }
+
+  return bestTeams;
+}
 function computeTiers(players, tierCounts, tierSize) {
   const map = {}; // playerId -> { tier, rank, total, category }
 
   // Tier bucket size = number of teams.
   // Example: 4 teams = 4 players in every complete tier.
-  const bucketSize = Math.max(1, Number(tierSize) || 1);
+  const suggestedTeams = suggestTeamCount(players);
+const bucketSize = Math.max(
+  1,
+  Number(tierSize) || suggestedTeams
+);
 
   const groups = [
     {
