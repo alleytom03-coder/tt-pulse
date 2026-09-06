@@ -3190,6 +3190,50 @@ function TeamsTab({ data, update, tiers, notify }) {
     });
   }
   const balanceOk = groupTeams.length >= 2 && distributionChecks.every(Boolean);
+    // Team Readiness preview — does not assign or modify any teams.
+  const suggestedTeams = suggestTeamCount(data.players);
+  const readinessGroups = [
+    {
+      key: "male",
+      label: "Adult Male",
+      players: data.players.filter(
+        (p) => ageGroupOf(p) === "adult" && p.gender === "Male"
+      ),
+    },
+    {
+      key: "female",
+      label: "Adult Female",
+      players: data.players.filter(
+        (p) => ageGroupOf(p) === "adult" && p.gender === "Female"
+      ),
+    },
+    {
+      key: "kids",
+      label: "Kids Mixed",
+      players: data.players.filter(
+        (p) => ageGroupOf(p) === "kids"
+      ),
+    },
+  ].map((g) => {
+    const calibrated = g.players.filter(
+      (p) => isCalibrated(p) && tiers[p.id]
+    ).length;
+
+    const pending = g.players.length - calibrated;
+    const completeTiers = Math.floor(calibrated / suggestedTeams);
+    const remainder = calibrated % suggestedTeams;
+    const shortBy = remainder === 0 ? 0 : suggestedTeams - remainder;
+
+    return {
+      ...g,
+      total: g.players.length,
+      calibrated,
+      pending,
+      completeTiers,
+      remainder,
+      shortBy,
+    };
+  });
 
   const createTeam = () => {
     const name = teamName.trim();
