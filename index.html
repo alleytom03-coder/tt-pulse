@@ -7298,7 +7298,30 @@ function App() {
           /* nothing to do */
         }
       }
-      setData(next);
+      try {
+  const calibrationRows = await loadCalibrationsFromSupabase();
+
+  const calByPlayer = {};
+  calibrationRows.forEach((c) => {
+    calByPlayer[c.player_id] = {
+      serve: Number(c.serve),
+      forehand: Number(c.forehand),
+      backhand: Number(c.backhand),
+      rallySmash: Number(c.rally_smash),
+      temperament: Number(c.temperament)
+    };
+  });
+
+  next.players = (next.players || []).map((p) =>
+    calByPlayer[p.id]
+      ? { ...p, cal: calByPlayer[p.id] }
+      : p
+  );
+} catch (e) {
+  console.error("Calibration load failed:", e);
+}
+
+setData(next);
       try {
         const r = sessionStorage.getItem(SESSION_KEY);
         if (r && ROLE_RANK[r] != null) setRole(r);
