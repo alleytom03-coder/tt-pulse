@@ -7294,7 +7294,9 @@ function App() {
         }
       } catch (e) {
         /* first run — no saved data */
-      }try {
+      }
+      const next = { ...EMPTY, ...(saved || {}) };
+      try {
   const playerRows = await loadPlayersFromSupabase();
   const calibrationRows = await loadCalibrationsFromSupabase();
 
