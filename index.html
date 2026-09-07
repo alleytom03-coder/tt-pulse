@@ -150,10 +150,18 @@ async function loadPlayersFromSupabase() {
   );
 
   if (!response.ok) {
-    throw new Error("Player delete failed: " + response.status);
-  }
+  throw new Error("Player delete failed: " + response.status);
+}
 
-  return response.json();
+const deletedRows = await response.json();
+
+if (!deletedRows || deletedRows.length === 0) {
+  throw new Error(
+    "Player was not deleted from the database. Please log in again as Super Admin."
+  );
+}
+
+return deletedRows;
 }
   async function saveCalibrationToSupabase(playerId, cal) {
   const C = window.TT_CLOUD;
