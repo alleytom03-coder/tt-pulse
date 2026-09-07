@@ -2000,8 +2000,32 @@ const duplicatePlayerCount = duplicateGroups.reduce(
     notify(err.message || "Player save failed.");
   }
 };
-  const remove = (id) => {
-  notify("Player removal is temporarily disabled for data safety.");
+  const remove = async (id) => {
+  const player = data.players.find((p) => p.id === id);
+
+  if (!player) {
+    notify("Player not found.");
+    return;
+  }
+
+  const confirmed = window.confirm(
+    `Permanently delete ${fullName(player)}?\n\nThis cannot be undone.`
+  );
+
+  if (!confirmed) return;
+
+  try {
+    await deletePlayerFromSupabase(id);
+
+    setData((d) => ({
+      ...d,
+      players: d.players.filter((p) => p.id !== id)
+    }));
+
+    notify(`Player permanently deleted: ${fullName(player)}.`);
+  } catch (err) {
+    notify(err.message || "Player could not be deleted.");
+  }
 };
   const list = data.players
     .filter((p) =>
