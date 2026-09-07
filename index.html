@@ -1927,25 +1927,67 @@ const duplicatePlayerCount = duplicateGroups.reduce(
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   const save = async () => {
-    if (!form.first.trim()) {
-      notify("A first name is needed to add a player.");
-      return;
-    }
-    if (editing) {
-      update((d) => ({
-        ...d,
-        players: d.players.map((p) => (p.id === editing ? { ...p, ...form, catSource: "manual" } : p)),
-      }));
-      setEditing(null);
-    } else {
-      update((d) => ({
-        ...d,
-        players: [...d.players, { id: uid(), ...form, cal: blankCal(), catSource: "manual" }],
-      }));
-    }
-    setForm(blank);
-  };
+  if (!form.first.trim()) {
+    notify("A first name is needed to add a player.");
+    return;
+  }
 
+  try {
+    if (editing) {
+      const existingPlayer = data.players.find(
+        (p) => p.id === editing
+      );
+
+      if (!existingPlayer) {
+        notify("Player could not be found.");
+        return;
+      }
+
+      const updatedPlayer = {
+        ...existingPlayer,
+        ...form,
+        id: existingPlayer.id,
+        catSource: "manual"
+      };
+
+      // Save ONLY the player record to tt_players
+      await savePlayersToSupabase([updatedPlayer]);
+
+      // Update screen only — do NOT write old tt_state
+      setData((d) => ({
+        ...d,
+        players: d.players.map((p) =>
+          p.id === editing ? updatedPlayer : p
+        )
+      }));
+
+      setEditing(null);
+      notify(`Player updated: ${fullName(updatedPlayer)}.`);
+    } else {
+      const newPlayer = {
+        id: uid(),
+        ...form,
+        cal: blankCal(),
+        catSource: "manual"
+      };
+
+      // Save ONLY the new player to tt_players
+      await savePlayersToSupabase([newPlayer]);
+
+      // Update screen only — do NOT write old tt_state
+      setData((d) => ({
+        ...d,
+        players: [...d.players, newPlayer]
+      }));
+
+      notify(`Player added: ${fullName(newPlayer)}.`);
+    }
+
+    setForm(blank);
+  } catch (err) {
+    notify(err.message || "Player save failed.");
+  }
+};
   const remove = (id) => {
     update((d) => ({
       ...d,
