@@ -1989,14 +1989,8 @@ const duplicatePlayerCount = duplicateGroups.reduce(
   }
 };
   const remove = (id) => {
-    update((d) => ({
-      ...d,
-      players: d.players.filter((p) => p.id !== id),
-      teams: d.teams.map((t) => ({ ...t, playerIds: t.playerIds.filter((x) => x !== id) })),
-      matches: d.matches.filter((m) => m.playerA !== id && m.playerB !== id),
-    }));
-  };
-
+  notify("Player removal is temporarily disabled for data safety.");
+};
   const list = data.players
     .filter((p) =>
       catFilter === "all"
