@@ -1,6 +1,7 @@
 <!-- TT Pulse SAFE PLAYER/CALIBRATION CHECKPOINT 2026-09-07 -->
 <!DOCTYPE html>
 <html lang="en">
+<!-- TT PULSE SAFE FIXED CHECKPOINT 2026-09-07: relational players/calibrations + Players roll fix + Calibration setData fix -->
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -2055,6 +2056,25 @@ const duplicatePlayerCount = duplicateGroups.reduce(
   0
 );
 
+// Safe category roll-up for the Players dashboard.
+// Kids are stored as ageGroup="kids" with gender Male/Female in the
+// relational tables, while the UI category keys remain Boy/Girl.
+const roll = CATEGORIES.map((c) => {
+  const sex = c.key === "Boy" ? "Male" : c.key === "Girl" ? "Female" : c.key;
+  const grp = isKid(c.key) ? "kids" : "adult";
+  const inCat = (data.players || []).filter(
+    (p) => ageGroupOf(p) === grp && (p.gender === sex || p.gender === c.key)
+  );
+  return {
+    key: c.key,
+    count: inCat.length,
+    rated: inCat.filter(isCalibrated).length,
+    review: inCat.filter(
+      (p) => p.catSource === "guess" || p.catSource === "default"
+    ).length,
+  };
+});
+
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   const save = async () => {
@@ -3010,7 +3030,7 @@ function AvailabilityTab({ data, update, notify }) {
    Tab: Calibration
    ============================================================ */
 
-function CalibrationTab({ data, update, tiers, notify }) {
+function CalibrationTab({ data, update, setData, tiers, notify }) {
   const [playerId, setPlayerId] = useState("");
   const [ageFilter, setAgeFilter] = useState("all");
   const allPlayers = Array.isArray(data.players) ? data.players : [];
