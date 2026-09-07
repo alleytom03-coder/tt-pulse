@@ -1,4 +1,4 @@
-<!-- deployment refresh 2026-09-07 -->
+<!-- TT Pulse SAFE PLAYER/CALIBRATION CHECKPOINT 2026-09-07 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -59,9 +59,12 @@
 
    Then paste the project URL and the public anon key below.
    ================================================================== */
+/* ============================================================
+   SAFE RELATIONAL DATA LAYER — Players + Calibration
+   These two domains no longer write through the legacy tt_state JSON.
+   ============================================================ */
 async function loadPlayersFromSupabase() {
   const C = window.TT_CLOUD;
-
   const response = await fetch(
     C.url.replace(/\/+$/, "") +
       "/rest/v1/tt_players?select=id,first_name,last_name,phone,gender,age_group,flat_no",
@@ -72,16 +75,12 @@ async function loadPlayersFromSupabase() {
       }
     }
   );
-
-  if (!response.ok) {
-    throw new Error("Could not load players: " + response.status);
-  }
-
+  if (!response.ok) throw new Error("Could not load players: " + response.status);
   return response.json();
 }
-  async function loadCalibrationsFromSupabase() {
-  const C = window.TT_CLOUD;
 
+async function loadCalibrationsFromSupabase() {
+  const C = window.TT_CLOUD;
   const response = await fetch(
     C.url.replace(/\/+$/, "") +
       "/rest/v1/tt_calibrations?select=player_id,serve,forehand,backhand,rally_smash,temperament,final_score",
@@ -92,104 +91,166 @@ async function loadPlayersFromSupabase() {
       }
     }
   );
-
-  if (!response.ok) {
-    throw new Error("Could not load calibrations: " + response.status);
-  }
-
+  if (!response.ok) throw new Error("Could not load calibrations: " + response.status);
   return response.json();
 }
-  async function deletePlayerFromSupabase(playerId) {
+
+function storeSuperAdminSession(result) {
+  if (!result || !result.access_token) return;
+  window.TT_AUTH_TOKEN = result.access_token;
+  sessionStorage.setItem("tt_auth_token", result.access_token);
+  if (result.refresh_token) sessionStorage.setItem("tt_refresh_token", result.refresh_token);
+  const expiresAt = result.expires_at ||
+    (result.expires_in ? Math.floor(Date.now() / 1000) + Number(result.expires_in) : 0);
+  if (expiresAt) sessionStorage.setItem("tt_auth_expires_at", String(expiresAt));
+}
+
+function clearSuperAdminSession() {
+  window.TT_AUTH_TOKEN = null;
+  sessionStorage.removeItem("tt_auth_token");
+  sessionStorage.removeItem("tt_refresh_token");
+  sessionStorage.removeItem("tt_auth_expires_at");
+}
+
+async function refreshSuperAdminToken() {
   const C = window.TT_CLOUD;
-
-  const token =
-    window.TT_AUTH_TOKEN ||
-    sessionStorage.getItem("tt_auth_token");
-
-  if (!token) {
-    throw new Error("Please log in again as Super Admin.");
-  }
-
-  const calCheck = await fetch(
-    C.url.replace(/\/+$/, "") +
-      "/rest/v1/tt_calibrations?player_id=eq." +
-      encodeURIComponent(playerId) +
-      "&select=player_id",
-    {
-      headers: {
-        apikey: C.anonKey,
-        Authorization: "Bearer " + token
-      }
-    }
-  );
-
-  if (!calCheck.ok) {
-    throw new Error("Could not check calibration record.");
-  }
-
-  const calRows = await calCheck.json();
-
-  if (calRows.length > 0) {
-    throw new Error(
-      "This player has calibration data and cannot be permanently deleted."
-    );
+  const refreshToken = sessionStorage.getItem("tt_refresh_token");
+  if (!refreshToken) {
+    clearSuperAdminSession();
+    throw new Error("Your Super Admin session expired. Please log in again.");
   }
 
   const response = await fetch(
-    C.url.replace(/\/+$/, "") +
-      "/rest/v1/tt_players?id=eq." +
-      encodeURIComponent(playerId),
+    C.url.replace(/\/+$/, "") + "/auth/v1/token?grant_type=refresh_token",
     {
-      method: "DELETE",
+      method: "POST",
       headers: {
         apikey: C.anonKey,
-        Authorization: "Bearer " + token,
-        Prefer: "return=representation"
-      }
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ refresh_token: refreshToken })
+    }
+  );
+
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result.access_token) {
+    clearSuperAdminSession();
+    throw new Error("Your Super Admin session expired. Please log in again.");
+  }
+  storeSuperAdminSession(result);
+  return result.access_token;
+}
+
+async function getValidSuperAdminToken() {
+  let token = window.TT_AUTH_TOKEN || sessionStorage.getItem("tt_auth_token");
+  if (!token) throw new Error("Please log in again as Super Admin.");
+
+  const expiresAt = Number(sessionStorage.getItem("tt_auth_expires_at") || 0);
+  if (expiresAt && expiresAt <= Math.floor(Date.now() / 1000) + 90) {
+    token = await refreshSuperAdminToken();
+  }
+  return token;
+}
+
+async function authenticatedSupabaseFetch(url, options = {}) {
+  const C = window.TT_CLOUD;
+  const run = async (token) => fetch(url, {
+    ...options,
+    headers: {
+      apikey: C.anonKey,
+      ...(options.headers || {}),
+      Authorization: "Bearer " + token
+    }
+  });
+
+  let token = await getValidSuperAdminToken();
+  let response = await run(token);
+  if (response.status === 401 || response.status === 403) {
+    token = await refreshSuperAdminToken();
+    response = await run(token);
+  }
+  return response;
+}
+
+async function savePlayersToSupabase(players) {
+  if (!Array.isArray(players) || !players.length) return [];
+  const C = window.TT_CLOUD;
+  const rows = players.map((p) => ({
+    id: p.id,
+    first_name: p.first || "",
+    last_name: p.last || "",
+    phone: p.phone || "",
+    gender: p.gender || "",
+    age_group: ageGroupOf(p),
+    flat_no: p.flat || "",
+    updated_at: new Date().toISOString()
+  }));
+
+  const response = await authenticatedSupabaseFetch(
+    C.url.replace(/\/+$/, "") + "/rest/v1/tt_players?on_conflict=id",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Prefer: "resolution=merge-duplicates,return=representation"
+      },
+      body: JSON.stringify(rows)
     }
   );
 
   if (!response.ok) {
-  throw new Error("Player delete failed: " + response.status);
+    const text = await response.text().catch(() => "");
+    throw new Error("Player database save failed: " + response.status + (text ? " — " + text.slice(0, 140) : ""));
+  }
+  const saved = await response.json();
+  if (!Array.isArray(saved) || saved.length !== rows.length) {
+    throw new Error("Player save was not confirmed by the database. Nothing was changed on screen.");
+  }
+  return saved;
 }
 
-const deletedRows = await response.json();
-
-if (!deletedRows || deletedRows.length === 0) {
-  throw new Error(
-    "Player was not deleted from the database. Please log in again as Super Admin."
-  );
-}
-
-return deletedRows;
-}
-  async function saveCalibrationToSupabase(playerId, cal) {
+async function deletePlayerFromSupabase(playerId) {
   const C = window.TT_CLOUD;
 
-  const token =
-    window.TT_AUTH_TOKEN ||
-    sessionStorage.getItem("tt_auth_token");
-
-  if (!token) {
-    throw new Error("Please log in again as Super Admin.");
+  const calCheck = await authenticatedSupabaseFetch(
+    C.url.replace(/\/+$/, "") +
+      "/rest/v1/tt_calibrations?player_id=eq." + encodeURIComponent(playerId) + "&select=player_id"
+  );
+  if (!calCheck.ok) throw new Error("Could not check calibration record: " + calCheck.status);
+  const calRows = await calCheck.json();
+  if (calRows.length > 0) {
+    throw new Error("This player has calibration data and cannot be permanently deleted.");
   }
 
+  const response = await authenticatedSupabaseFetch(
+    C.url.replace(/\/+$/, "") + "/rest/v1/tt_players?id=eq." + encodeURIComponent(playerId),
+    {
+      method: "DELETE",
+      headers: { Prefer: "return=representation" }
+    }
+  );
+  if (!response.ok) throw new Error("Player delete failed: " + response.status);
+  const deletedRows = await response.json();
+  if (!Array.isArray(deletedRows) || deletedRows.length !== 1) {
+    throw new Error("Player was not deleted from the database. Nothing was changed on screen.");
+  }
+  return deletedRows;
+}
+
+async function saveCalibrationToSupabase(playerId, cal) {
+  const C = window.TT_CLOUD;
   const serve = Number(cal.serve || 0);
   const forehand = Number(cal.forehand || 0);
   const backhand = Number(cal.backhand || 0);
   const rallySmash = Number(cal.rallySmash || 0);
   const temperament = Number(cal.temperament || 0);
+  const finalScore = (serve + forehand + backhand + rallySmash + temperament) / 5;
 
-  const finalScore =
-    (serve + forehand + backhand + rallySmash + temperament) / 5;
-
-  const response = await fetch(
+  const response = await authenticatedSupabaseFetch(
     C.url.replace(/\/+$/, "") + "/rest/v1/tt_calibrations?on_conflict=player_id",
     {
       method: "POST",
       headers: {
-        apikey: C.anonKey,
-        Authorization: "Bearer " + token,
         "Content-Type": "application/json",
         Prefer: "resolution=merge-duplicates,return=representation"
       },
@@ -206,12 +267,12 @@ return deletedRows;
       }])
     }
   );
-
-  if (!response.ok) {
-    throw new Error("Calibration database save failed: " + response.status);
+  if (!response.ok) throw new Error("Calibration database save failed: " + response.status);
+  const saved = await response.json();
+  if (!Array.isArray(saved) || saved.length !== 1) {
+    throw new Error("Calibration save was not confirmed by the database.");
   }
-
-  return response.json();
+  return saved;
 }
   window.TT_CLOUD = {
   url: "https://zqveemyynobxwlwybdqh.supabase.co",              // e.g. "https://abcdefgh.supabase.co"
@@ -1684,6 +1745,52 @@ function inferRecords(rows) {
   return { records, found };
 }
 
+/* Known TT Pulse Google Form export (works WITH or WITHOUT a header row).
+   Expected columns: timestamp | first | phone | last | gender | Kids/Adult |
+   class | flat/building | availability | ... */
+function parseTTPulseGoogleFormRows(rows) {
+  const clean = (rows || []).filter((r) => Array.isArray(r) && r.some((c) => String(c ?? "").trim() !== ""));
+  if (!clean.length) return null;
+
+  const looksGender = (v) => /^(male|female|m|f)$/i.test(String(v || "").trim());
+  const looksCategory = (v) => /^(kid|kids|adult|adults)$/i.test(String(v || "").trim());
+  const looksPhone = (v) => {
+    const d = String(v || "").replace(/\D/g, "");
+    return d.length >= 7 && d.length <= 15;
+  };
+  const looksTimestamp = (v) => /\d{4}.*\d{1,2}.*\d{1,2}|\d{1,2}.*\d{1,2}.*\d{4}/.test(String(v || ""));
+
+  const dataRows = clean.filter((r) =>
+    r.length >= 9 &&
+    String(r[1] || "").trim() &&
+    looksPhone(r[2]) &&
+    looksGender(r[4]) &&
+    looksCategory(r[5]) &&
+    (looksTimestamp(r[0]) || clean.length === 1)
+  );
+
+  // Use the fixed Google Form layout only when it clearly matches the file.
+  if (!dataRows.length || dataRows.length < Math.max(1, Math.floor(clean.length * 0.4))) return null;
+
+  const records = dataRows.map((r) => ({
+    firstname: String(r[1] ?? "").trim(),
+    phone: String(r[2] ?? "").trim(),
+    lastname: String(r[3] ?? "").trim(),
+    gender: String(r[4] ?? "").trim(),
+    agegroup: String(r[5] ?? "").trim(),
+    class: String(r[6] ?? "").trim(),
+    flat: String(r[7] ?? "").trim(),
+    availability: String(r[8] ?? "").trim(),
+    timestamp: String(r[0] ?? "").trim()
+  }));
+
+  return {
+    records,
+    headers: ["timestamp", "first name", "phone", "last name", "gender", "category", "class", "flat", "availability"],
+    mode: "tt-google-form"
+  };
+}
+
 /* Header mode when the headers are usable, content mode otherwise. */
 function buildRecords(rows) {
   // Ignore completely blank rows before detecting headers or data
@@ -1693,6 +1800,10 @@ function buildRecords(rows) {
   );
 
   if (!rows.length) return { records: [], headers: [], mode: "none" };
+
+  const ttGoogleForm = parseTTPulseGoogleFormRows(rows);
+  if (ttGoogleForm) return ttGoogleForm;
+
   const byHeader = rowsToObjects(rows);
   const named = byHeader.records.filter((o) => {
     const n = readName(o);
@@ -2221,17 +2332,25 @@ const duplicateReviewCount = players.filter(
   (p) => p.possibleDuplicateOf
 ).length;
     if (newPlayers.length) {
-  await savePlayersToSupabase(newPlayers);
+      try {
+        await savePlayersToSupabase(newPlayers);
+      } catch (err) {
+        notify(err.message || "Import failed. No imported players were added to the screen.");
+        return;
+      }
 
-  setData((d) => ({
-    ...d,
-    players: players
-  }));
-}
+      setData((d) => ({
+        ...d,
+        players: players
+      }));
+    }
+
     if (added === 0 && merged === 0) {
-      notify(
-        "No names found in that file. Columns seen: " + (headers || []).join(", ")
-      );
+      if (dupeNames.length) {
+        notify(`${objs.length} rows read → 0 added. ${dupeNames.length} already exist with the same first and last name.`);
+      } else {
+        notify("No player names could be read from that file.");
+      }
     } else {
       const cats = objs.map((o) => {
         const rawSex = pick(o, F_GENDER);
@@ -2300,77 +2419,12 @@ const duplicateReviewCount = players.filter(
 })();
 
   const keepDuplicateSeparate = (id) => {
-    update((d) => ({
-      ...d,
-      players: d.players.map((p) =>
-        p.id === id ? { ...p, possibleDuplicateOf: null, duplicateReason: null } : p
-      ),
-    }));
-    notify("Kept as a separate player.");
+    notify("Duplicate review is temporarily read-only while player data is protected in Supabase.");
   };
 
   const mergePossibleDuplicate = (id, detectedMasterId = null) => {
-  update((d) => {
-    const dup = d.players.find((p) => p.id === id);
-    if (!dup) return d;
-
-    let masterId = dup.possibleDuplicateOf || detectedMasterId;
-
-    // For duplicates detected from matching First Name + Last Name
-    if (!masterId) {
-      const reviewEntry = duplicatePlayers.find((p) => p.id === id);
-      masterId = reviewEntry?.possibleDuplicateOf;
-    }
-
-    if (!masterId) return d;
-
-    const master = d.players.find((p) => p.id === masterId);
-    if (!master || master.id === dup.id) return d;
-      const players = d.players
-        .filter((p) => p.id !== dup.id)
-        .map((p) => p.id === master.id ? {
-          ...p,
-          phone: p.phone || dup.phone,
-          flat: p.flat || dup.flat,
-          cal: isCalibrated(dup) && !isCalibrated(p) ? dup.cal : p.cal,
-        } : p);
-
-      const availability = { ...(d.availability || {}) };
-      Object.keys(availability).forEach((k) => {
-        if (!k.startsWith(dup.id + "|")) return;
-        const date = k.slice(dup.id.length + 1);
-        const masterKey = master.id + "|" + date;
-        availability[masterKey] = Array.from(new Set([
-          ...(availability[masterKey] || []),
-          ...(availability[k] || []),
-        ]));
-        delete availability[k];
-      });
-
-      const teams = d.teams.map((t) => ({
-        ...t,
-        playerIds: Array.from(new Set(t.playerIds.map((pid) => pid === dup.id ? master.id : pid))),
-      }));
-      const matches = d.matches.map((m) => ({
-        ...m,
-        playerA: m.playerA === dup.id ? master.id : m.playerA,
-        playerB: m.playerB === dup.id ? master.id : m.playerB,
-      }));
-
-      return { ...d, players, availability, teams, matches };
-    });
-    notify("Duplicate entries merged into one player.");
+    notify("Duplicate merge is temporarily disabled for data safety. No player was changed.");
   };
-
-  const roll = CATEGORIES.map((c) => {
-    const inCat = data.players.filter((p) => p.gender === c.key);
-    return {
-      ...c,
-      count: inCat.length,
-      rated: inCat.filter(isCalibrated).length,
-      review: inCat.filter((p) => p.catSource === "guess" || p.catSource === "default" || !p.catSource).length,
-    };
-  });
 
   return (
     <div className="stack">
@@ -2380,7 +2434,7 @@ const duplicateReviewCount = players.filter(
         rows={rows}
         onImport={onImport}
         
-        note="Google Form smart import: detects Adult/Kids, phone/flat, Availability, season year and possible duplicate players. Exact duplicate names are merged; uncertain matches are sent to Duplicate review."
+        note="Safe import: TT Pulse Google Form exports work with or without headers. Existing exact-name players are skipped. Calibration is never imported or overwritten."
         notify={notify}
       />
 
@@ -7231,8 +7285,7 @@ const [authLoading, setAuthLoading] = useState(false);
       );
     }
 
-    window.TT_AUTH_TOKEN = result.access_token;
-    sessionStorage.setItem("tt_auth_token", result.access_token);
+    storeSuperAdminSession(result);
 
     onEnter("super");
 
@@ -7586,6 +7639,7 @@ setData(fresh);
 
   const leave = () => {
     setRole(null);
+    clearSuperAdminSession();
     try {
       sessionStorage.removeItem(SESSION_KEY);
     } catch (e) {
