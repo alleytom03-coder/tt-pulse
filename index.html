@@ -2228,7 +2228,7 @@ const duplicateReviewCount = players.filter(
         name="players"
         columns={columns}
         rows={rows}
-        onImport={onImport}
+        
         note="Google Form smart import: detects Adult/Kids, phone/flat, Availability, season year and possible duplicate players. Exact duplicate names are merged; uncertain matches are sent to Duplicate review."
         notify={notify}
       />
@@ -2840,13 +2840,12 @@ function CalibrationTab({ data, update, tiers, notify }) {
  try {
   await saveCalibrationToSupabase(player.id, draft);
 
-  update((d) => ({
-    ...d,
-    players: d.players.map((p) =>
-      p.id === player.id ? { ...p, cal: draft } : p
-    ),
-  }));
-
+  setData((d) => ({
+  ...d,
+  players: d.players.map((p) =>
+    p.id === player.id ? { ...p, cal: draft } : p
+  ),
+}));
   notify(`Calibration saved for ${fullName(player)}.`);
 } catch (err) {
   notify(err.message || "Calibration save failed.");
