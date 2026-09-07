@@ -98,6 +98,51 @@ async function loadPlayersFromSupabase() {
 
   return response.json();
 }
+  async function savePlayersToSupabase(players) {
+  const C = window.TT_CLOUD;
+
+  const token =
+    window.TT_AUTH_TOKEN ||
+    sessionStorage.getItem("tt_auth_token");
+
+  if (!token) {
+    throw new Error("Please log in again as Super Admin.");
+  }
+
+  const rows = players.map((p) => ({
+    id: p.id,
+    first_name: p.first || "",
+    last_name: p.last || "",
+    phone: p.phone || "",
+    gender: p.gender || "",
+    age_group: ageGroupOf(p),
+    flat_no: p.flat || "",
+    updated_at: new Date().toISOString()
+  }));
+
+  const response = await fetch(
+    C.url.replace(/\/+$/, "") +
+      "/rest/v1/tt_players?on_conflict=id",
+    {
+      method: "POST",
+      headers: {
+        apikey: C.anonKey,
+        Authorization: "Bearer " + token,
+        "Content-Type": "application/json",
+        Prefer: "resolution=merge-duplicates,return=representation"
+      },
+      body: JSON.stringify(rows)
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      "Player database save failed: " + response.status
+    );
+  }
+
+  return response.json();
+}
   async function saveCalibrationToSupabase(playerId, cal) {
   const C = window.TT_CLOUD;
 
