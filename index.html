@@ -98,7 +98,7 @@ async function loadPlayersFromSupabase() {
 
   return response.json();
 }
-  async function savePlayersToSupabase(players) {
+  async function deletePlayerFromSupabase(playerId) {
   const C = window.TT_CLOUD;
 
   const token =
@@ -109,36 +109,47 @@ async function loadPlayersFromSupabase() {
     throw new Error("Please log in again as Super Admin.");
   }
 
-  const rows = players.map((p) => ({
-    id: p.id,
-    first_name: p.first || "",
-    last_name: p.last || "",
-    phone: p.phone || "",
-    gender: p.gender || "",
-    age_group: ageGroupOf(p),
-    flat_no: p.flat || "",
-    updated_at: new Date().toISOString()
-  }));
+  const calCheck = await fetch(
+    C.url.replace(/\/+$/, "") +
+      "/rest/v1/tt_calibrations?player_id=eq." +
+      encodeURIComponent(playerId) +
+      "&select=player_id",
+    {
+      headers: {
+        apikey: C.anonKey,
+        Authorization: "Bearer " + token
+      }
+    }
+  );
+
+  if (!calCheck.ok) {
+    throw new Error("Could not check calibration record.");
+  }
+
+  const calRows = await calCheck.json();
+
+  if (calRows.length > 0) {
+    throw new Error(
+      "This player has calibration data and cannot be permanently deleted."
+    );
+  }
 
   const response = await fetch(
     C.url.replace(/\/+$/, "") +
-      "/rest/v1/tt_players?on_conflict=id",
+      "/rest/v1/tt_players?id=eq." +
+      encodeURIComponent(playerId),
     {
-      method: "POST",
+      method: "DELETE",
       headers: {
         apikey: C.anonKey,
         Authorization: "Bearer " + token,
-        "Content-Type": "application/json",
-        Prefer: "resolution=merge-duplicates,return=representation"
-      },
-      body: JSON.stringify(rows)
+        Prefer: "return=representation"
+      }
     }
   );
 
   if (!response.ok) {
-    throw new Error(
-      "Player database save failed: " + response.status
-    );
+    throw new Error("Player delete failed: " + response.status);
   }
 
   return response.json();
