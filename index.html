@@ -1894,7 +1894,7 @@ function DataBar({ name, columns, rows, onImport, note, notify }) {
    Tab: Players
    ============================================================ */
 
-function PlayersTab({ data, update, tiers, notify }) {
+function PlayersTab({ data, update, setData, tiers, notify }) {
   const blank = { first: "", last: "", gender: "Male", phone: "", flat: "" };
   const [form, setForm] = useState(blank);
   const [editing, setEditing] = useState(null);
@@ -1980,21 +1980,23 @@ const duplicatePlayerCount = duplicateGroups.reduce(
     isCalibrated(p) ? calScore(p).toFixed(2) : "",
   ]);
 
-  const onImport = (objs, headers, mode) => {
+  const onImport = async (objs, headers, mode) => {
     let added = 0;
     let merged = 0;
     let skipped = 0;
     let possibleDupes = 0;
     const dupeNames = [];
     let availRows = 0;
+    const newPlayers = [];
 
     const currentYear = Number(String(data.availabilityStart || "").slice(0,4)) || new Date().getFullYear();
-    const inferredYear = inferImportYear(objs, currentYear);
+const inferredYear = inferImportYear(objs, currentYear);
 
-    update((d) => {
-      const players = d.players.slice();
-      const availability = { ...(d.availability || {}) };
-
+const nextData = (() => {
+  const d = data;
+  const players = d.players.slice();
+  const availability = d.availability || {};
+  
       // If this is a new season, automatically roll the configured tournament
       // window to the year detected from the Google Form / Excel data.
       const rollYear = (ymd, yr) => /^\d{4}-\d{2}-\d{2}$/.test(ymd || "")
@@ -2035,18 +2037,12 @@ const duplicatePlayerCount = duplicateGroups.reduce(
 
 if (existingSameName) {
   dupeNames.push(`${first} ${last}`.trim());
+  skipped++;
+  return;
 }
 
         const cal = blankCal();
-        let hasCal = false;
-        SKILLS.forEach((s) => {
-          const v = pick(o, [s.label]);
-          if (v !== "") {
-            cal[s.key] = Math.max(0, Math.min(5, Number(v) || 0));
-            hasCal = true;
-          }
-        });
-
+const hasCal = false;
         const slotsByDate = readAvailability(o, inferredYear, effectiveStart, effectiveEnd);
 
         if (idx >= 0) {
@@ -2071,7 +2067,7 @@ if (existingSameName) {
   agegroup: rawCat,
   phone,
   flat,
-  cal,
+  cal: blankCal(),
   catSource
 };
           const maybe = players.find((p) => looksLikeSamePerson(p, incoming));
@@ -2083,10 +2079,11 @@ if (existingSameName) {
                "similar player details");
             possibleDupes++;
           }
-          players.push(incoming);
-          added++;
+         players.push(incoming);
+newPlayers.push(incoming);
+added++;
         }
-
+/*
         // Availability columns on the same row, if the sheet has them.
         const pid = players[players.length - 1].id;
         Object.keys(slotsByDate).forEach((date) => {
@@ -2101,6 +2098,7 @@ if (existingSameName) {
             availRows++;
           }
         });
+        */
       });
       const finalCounts = {
         Male: players.filter((p) => p.gender === "Male").length,
@@ -2120,9 +2118,36 @@ const duplicateReviewCount = players.filter(
   (p) => p.possibleDuplicateOf
 ).length;
       window.__ttLastImportCounts = finalCounts;
-      return { ...d, players, availability, availabilityStart: effectiveStart, availabilityEnd: effectiveEnd };
-    });
+      return { ...d, players };
+    })();
+const players = nextData.players;
 
+const finalCounts = {
+  Male: players.filter((p) => p.gender === "Male").length,
+  Female: players.filter((p) => p.gender === "Female").length,
+  Boy: players.filter((p) => p.gender === "Boy").length,
+  Girl: players.filter((p) => p.gender === "Girl").length,
+};
+
+const adultCount = players.filter(
+  (p) => ageGroupOf(p) === "adult"
+).length;
+
+const kidsCount = players.filter(
+  (p) => ageGroupOf(p) === "kids"
+).length;
+
+const duplicateReviewCount = players.filter(
+  (p) => p.possibleDuplicateOf
+).length;
+    if (newPlayers.length) {
+  await savePlayersToSupabase(newPlayers);
+
+  setData((d) => ({
+    ...d,
+    players: players
+  }));
+}
     if (added === 0 && merged === 0) {
       notify(
         "No names found in that file. Columns seen: " + (headers || []).join(", ")
@@ -2273,6 +2298,7 @@ const duplicateReviewCount = players.filter(
         name="players"
         columns={columns}
         rows={rows}
+        onImport={onImport}
         
         note="Google Form smart import: detects Adult/Kids, phone/flat, Availability, season year and possible duplicate players. Exact duplicate names are merged; uncertain matches are sent to Duplicate review."
         notify={notify}
@@ -7509,7 +7535,7 @@ setData(fresh);
 
   const myTabs = tabsFor(role);
   const active = myTabs.some((t) => t.key === tab) ? tab : myTabs[0].key;
-  const tabProps = { data, update, tiers, notify, role };
+  const tabProps = { data, update, setData, tiers, notify, role };
   const roleLabel = (ROLES.find((r) => r.key === role) || {}).label;
 
   return (
