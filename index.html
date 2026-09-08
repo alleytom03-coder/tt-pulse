@@ -1,7 +1,7 @@
 <!-- TT Pulse SAFE PLAYER/CALIBRATION CHECKPOINT 2026-09-07 -->
 <!DOCTYPE html>
 <html lang="en">
-<!-- TT PULSE SAFE FIXED CHECKPOINT 2026-09-07: relational players/calibrations + Players roll fix + Calibration setData fix -->
+<!-- TT PULSE SAFE TIER FIX 2026-09-08: canonical tier grouping for every calibrated player -->
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -446,6 +446,25 @@ const ageGroupOf = (p) => {
 };
 const ageGroupMatch = (p, filter) => filter === "all" || ageGroupOf(p) === filter;
 
+/* One canonical category for tiering, regardless of how older/imported rows
+   spelled gender/category. This prevents calibrated players from disappearing
+   from Tiers because of values such as Adult Female, female, Girl, etc. */
+function normalizedSex(p) {
+  const raw = String((p && p.gender) || "").trim().toLowerCase();
+  if (["female", "f", "woman", "women", "girl", "adult female", "kids female", "kid female"].includes(raw)) return "Female";
+  if (["male", "m", "man", "men", "boy", "adult male", "kids male", "kid male"].includes(raw)) return "Male";
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
+}
+
+function playerTierGroup(p) {
+  if (!p || !isCalibrated(p)) return null;
+  if (ageGroupOf(p) === "kids") return "Kids";
+  const sex = normalizedSex(p);
+  if (sex === "Male") return "Male";
+  if (sex === "Female") return "Female";
+  return null;
+}
+
 const SLOTS = [
   "6:00 – 8:00 AM",
   "8:00 – 10:00 AM",
@@ -635,31 +654,17 @@ const bucketSize = Math.max(1, suggestedTeams);
     {
       key: "Male",
       label: "Adult Male",
-      players: players.filter(
-  (p) =>
-    ageGroupOf(p) === "adult" &&
-    p.gender === "Male" &&
-    isCalibrated(p)
-),
+      players: players.filter((p) => playerTierGroup(p) === "Male"),
     },
     {
       key: "Female",
       label: "Adult Female",
-      players: players.filter(
-  (p) =>
-    ageGroupOf(p) === "adult" &&
-    p.gender === "Female" &&
-    isCalibrated(p)
-),
+      players: players.filter((p) => playerTierGroup(p) === "Female"),
     },
     {
       key: "Kids",
       label: "Kids Mixed",
-      players: players.filter(
-  (p) =>
-    ageGroupOf(p) === "kids" &&
-    isCalibrated(p)
-),
+      players: players.filter((p) => playerTierGroup(p) === "Kids"),
     },
   ];
 
@@ -3267,12 +3272,7 @@ function TiersTab({ data, update, tiers, notify }) {
   const rows = [];
   visibleCategories.forEach((c) => {
     data.players
-      .filter((p) =>
-  (c.key === "Kids"
-    ? ageGroupOf(p) === "kids"
-    : ageGroupOf(p) === "adult" && p.gender === c.key) &&
-  tiers[p.id]
-)
+      .filter((p) => playerTierGroup(p) === c.key && tiers[p.id])
       .sort((a, b) => tiers[a.id].rank - tiers[b.id].rank)
       .forEach((p) => {
         rows.push([c.label, tiers[p.id].tier, p.first, p.last, calScore(p).toFixed(2), tiers[p.id].rank]);
@@ -3285,7 +3285,7 @@ function TiersTab({ data, update, tiers, notify }) {
         name="tiers"
         columns={columns}
         rows={rows}
-        note="Tiers are calculated from calibration scores. Change the tier count below to re-split."
+        note="Every calibrated player is automatically ranked into Adult Male, Adult Female or Kids Mixed tiers."
         notify={notify}
       />
 
@@ -3373,12 +3373,7 @@ function TiersTab({ data, update, tiers, notify }) {
 
       {visibleCategories.map((c) => {
         const group = data.players
-          .filter((p) =>
-  (c.key === "Kids"
-    ? ageGroupOf(p) === "kids"
-    : ageGroupOf(p) === "adult" && p.gender === c.key) &&
-  tiers[p.id]
-)
+          .filter((p) => playerTierGroup(p) === c.key && tiers[p.id])
           .sort((a, b) => tiers[a.id].rank - tiers[b.id].rank);
         const byTier = {};
         group.forEach((p) => {
