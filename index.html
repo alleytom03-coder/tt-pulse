@@ -460,6 +460,23 @@ const ageGroupOf = (p) => {
 };
 const ageGroupMatch = (p, filter) => filter === "all" || ageGroupOf(p) === filter;
 
+/* Canonical participant category. Counts ALWAYS use every player record,
+   never calibration/tier status. This also keeps category edits consistent
+   when relational rows store age_group separately from gender. */
+function participantCategory(p) {
+  const sex = normalizedSex(p);
+  if (ageGroupOf(p) === "kids") return sex === "Female" ? "Girl" : "Boy";
+  return sex === "Female" ? "Female" : "Male";
+}
+function applyParticipantCategory(p, category) {
+  return {
+    ...p,
+    gender: category,
+    ageGroup: isKid(category) ? "kids" : "adult",
+    catSource: "manual"
+  };
+}
+
 /* One canonical category for tiering, regardless of how older/imported rows
    spelled gender/category. This prevents calibrated players from disappearing
    from Tiers because of values such as Adult Female, female, Girl, etc. */
@@ -2079,10 +2096,8 @@ const duplicatePlayerCount = duplicateGroups.reduce(
 // Kids are stored as ageGroup="kids" with gender Male/Female in the
 // relational tables, while the UI category keys remain Boy/Girl.
 const roll = CATEGORIES.map((c) => {
-  const sex = c.key === "Boy" ? "Male" : c.key === "Girl" ? "Female" : c.key;
-  const grp = isKid(c.key) ? "kids" : "adult";
   const inCat = (data.players || []).filter(
-    (p) => ageGroupOf(p) === grp && (p.gender === sex || p.gender === c.key)
+    (p) => participantCategory(p) === c.key
   );
   return {
     key: c.key,
@@ -2113,12 +2128,11 @@ const roll = CATEGORIES.map((c) => {
         return;
       }
 
-      const updatedPlayer = {
+      const updatedPlayer = applyParticipantCategory({
         ...existingPlayer,
         ...form,
-        id: existingPlayer.id,
-        catSource: "manual"
-      };
+        id: existingPlayer.id
+      }, form.gender);
 
       // Save ONLY the player record to tt_players
       await savePlayersToSupabase([updatedPlayer]);
@@ -2134,12 +2148,11 @@ const roll = CATEGORIES.map((c) => {
       setEditing(null);
       notify(`Player updated: ${fullName(updatedPlayer)}.`);
     } else {
-      const newPlayer = {
+      const newPlayer = applyParticipantCategory({
         id: uid(),
         ...form,
-        cal: blankCal(),
-        catSource: "manual"
-      };
+        cal: blankCal()
+      }, form.gender);
 
       // Save ONLY the new player to tt_players
       await savePlayersToSupabase([newPlayer]);
@@ -2203,7 +2216,7 @@ const roll = CATEGORIES.map((c) => {
         ? true
         : catFilter === "review"
         ? p.catSource === "guess" || p.catSource === "default" || !p.catSource
-        : p.gender === catFilter
+        : participantCategory(p) === catFilter
     )
     .filter((p) => {
       const s = q.trim().toLowerCase();
@@ -2215,7 +2228,7 @@ const roll = CATEGORIES.map((c) => {
   const rows = data.players.map((p) => [
     p.first,
     p.last,
-    p.gender,
+    catLabel(participantCategory(p)),
     p.phone,
     p.flat || "",
     tiers[p.id] ? tiers[p.id].tier : "",
@@ -2750,15 +2763,20 @@ const duplicateReviewCount = players.filter(
                     <td>
                       <select
                         className={"cat-select" + (p.catSource === "guess" || p.catSource === "default" ? " unsure" : "")}
-                        value={p.gender}
-                        onChange={(e) =>
-                          update((d) => ({
-                            ...d,
-                            players: d.players.map((x) =>
-                              x.id === p.id ? { ...x, gender: e.target.value, catSource: "manual" } : x
-                            ),
-                          }))
-                        }
+                        value={participantCategory(p)}
+                        onChange={async (e) => {
+                          const changed = applyParticipantCategory(p, e.target.value);
+                          try {
+                            await savePlayersToSupabase([changed]);
+                            setData((d) => ({
+                              ...d,
+                              players: d.players.map((x) => x.id === p.id ? changed : x)
+                            }));
+                            notify(`${fullName(p)} moved to ${catLabel(e.target.value)}.`);
+                          } catch (err) {
+                            notify(err.message || "Category change failed. Nothing was changed.");
+                          }
+                        }}
                         title={
                           p.catSource === "guess"
                             ? "Guessed from the first name — confirm it"
@@ -2793,7 +2811,7 @@ const duplicateReviewCount = players.filter(
                         className="btn btn-tiny"
                         onClick={() => {
                           setEditing(p.id);
-                          setForm({ first: p.first, last: p.last, gender: p.gender, phone: p.phone });
+                          setForm({ first: p.first, last: p.last, gender: participantCategory(p), phone: p.phone, ageGroup: ageGroupOf(p) });
                           window.scrollTo({ top: 0, behavior: "smooth" });
                         }}
                       >
