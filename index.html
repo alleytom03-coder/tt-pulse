@@ -210,17 +210,31 @@ async function savePlayersToSupabase(players) {
   return saved;
 }
 
-async function deletePlayerFromSupabase(playerId) {
+async function deletePlayerFromSupabase(playerId, allowCalibratedDelete = false) {
   const C = window.TT_CLOUD;
 
   const calCheck = await authenticatedSupabaseFetch(
     C.url.replace(/\/+$/, "") +
-      "/rest/v1/tt_calibrations?player_id=eq." + encodeURIComponent(playerId) + "&select=player_id"
+      "/rest/v1/tt_calibrations?player_id=eq." + encodeURIComponent(playerId) + "&select=player_id,final_score"
   );
   if (!calCheck.ok) throw new Error("Could not check calibration record: " + calCheck.status);
   const calRows = await calCheck.json();
+
+  if (calRows.length > 0 && !allowCalibratedDelete) {
+    throw new Error("This player has calibration data. Only Super Admin can permanently delete a calibrated player.");
+  }
+
+  // Super Admin: remove ONLY this selected player's calibration first.
   if (calRows.length > 0) {
-    throw new Error("This player has calibration data and cannot be permanently deleted.");
+    const calDelete = await authenticatedSupabaseFetch(
+      C.url.replace(/\/+$/, "") + "/rest/v1/tt_calibrations?player_id=eq." + encodeURIComponent(playerId),
+      { method: "DELETE", headers: { Prefer: "return=representation" } }
+    );
+    if (!calDelete.ok) throw new Error("Calibration delete failed: " + calDelete.status);
+    const deletedCal = await calDelete.json();
+    if (!Array.isArray(deletedCal) || deletedCal.length !== 1) {
+      throw new Error("Calibration deletion was not confirmed. Player was NOT deleted.");
+    }
   }
 
   const response = await authenticatedSupabaseFetch(
@@ -233,7 +247,7 @@ async function deletePlayerFromSupabase(playerId) {
   if (!response.ok) throw new Error("Player delete failed: " + response.status);
   const deletedRows = await response.json();
   if (!Array.isArray(deletedRows) || deletedRows.length !== 1) {
-    throw new Error("Player was not deleted from the database. Nothing was changed on screen.");
+    throw new Error("Player was not deleted from the database. Please refresh before doing anything else.");
   }
   return deletedRows;
 }
@@ -2031,7 +2045,7 @@ function DataBar({ name, columns, rows, onImport, note, notify }) {
    Tab: Players
    ============================================================ */
 
-function PlayersTab({ data, update, setData, tiers, notify }) {
+function PlayersTab({ data, update, setData, tiers, notify, role }) {
   const blank = { first: "", last: "", gender: "Male", phone: "", flat: "" };
   const [form, setForm] = useState(blank);
   const [editing, setEditing] = useState(null);
@@ -2152,14 +2166,26 @@ const roll = CATEGORIES.map((c) => {
     return;
   }
 
+  const calibrated = isCalibrated(player);
+  if (calibrated && role !== "super") {
+    notify("This player is calibrated. Only Super Admin can permanently delete a calibrated player.");
+    return;
+  }
+
+  const score = calibrated
+    ? ((Number(player.cal?.serve || 0) + Number(player.cal?.forehand || 0) + Number(player.cal?.backhand || 0) + Number(player.cal?.rallySmash || 0) + Number(player.cal?.temperament || 0)) / 5).toFixed(2)
+    : null;
+
   const confirmed = window.confirm(
-    `Permanently delete ${fullName(player)}?\n\nThis cannot be undone.`
+    calibrated
+      ? `SUPER ADMIN DELETE\n\nPermanently delete ${fullName(player)} and ONLY this player's calibration (${score})?\n\nThis cannot be undone.`
+      : `Permanently delete ${fullName(player)}?\n\nThis cannot be undone.`
   );
 
   if (!confirmed) return;
 
   try {
-    await deletePlayerFromSupabase(id);
+    await deletePlayerFromSupabase(id, calibrated && role === "super");
 
     setData((d) => ({
       ...d,
