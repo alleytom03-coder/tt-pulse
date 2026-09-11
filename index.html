@@ -1,8 +1,11 @@
-<!-- TT Pulse SAFE PLAYER/CALIBRATION CHECKPOINT 2026-09-07 -->
+<!-- TT Pulse WC FOOLPROOF BONUS FIX 2026-09-11: WC result derived from finished set score -->
+<!-- TT PULSE SAFE TIER ROUND-ROBIN FIXTURES 2026-09-10 -->
+<!-- TT PULSE UPDATED WILDCARD + FIXED 4-PLAYER TIERS 2026-09-11 -->
 <!DOCTYPE html>
 <html lang="en">
 <!-- TT PULSE SAFE TIER FIX 2026-09-08: canonical tier grouping for every calibrated player -->
 <head>
+<!-- TT PULSE WC BONUS FINAL FIX 2026-09-11: +20 derived from actual set winner; cloud persistence repaired -->
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="theme-color" content="#060E1F" />
@@ -323,28 +326,30 @@ async function saveCalibrationToSupabase(playerId, cal) {
     fetch(base(), {
       method: "POST",
       headers: {
-  ...head({ Prefer: "resolution=merge-duplicates,return=representation" }),
-  Authorization: "Bearer " + (
-  window.TT_AUTH_TOKEN ||
-  sessionStorage.getItem("tt_auth_token") ||
-  C.anonKey
-)
-},
+        ...head({ Prefer: "resolution=merge-duplicates,return=representation" }),
+        Authorization: "Bearer " + (
+          window.TT_AUTH_TOKEN ||
+          sessionStorage.getItem("tt_auth_token") ||
+          C.anonKey
+        )
+      },
       body: JSON.stringify([{ id: C.row, doc: JSON.parse(body), updated_at: new Date().toISOString() }])
     })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(async function (r) {
-  if (!r.ok) {
-    const text = await r.text();
-    throw new Error("Cloud save failed (" + r.status + "): " + text);
-  }
-  return r.json();
-})
+      .then(async function (response) {
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error("Cloud save failed (" + response.status + "): " + text);
+        }
+        return response.json();
+      })
       .then(function (rows) {
         if (rows && rows[0]) window.storage.mark = rows[0].updated_at;
         window.storage.lastError = "";
       })
-      .catch(function (e) { window.storage.lastError = String(e && e.message || e); })
+      .catch(function (e) {
+        window.storage.lastError = String(e && e.message || e);
+        console.error("TT Pulse cloud save failed:", e);
+      })
       .then(function () { inflight = false; settled = Date.now(); if (pending != null) push(); });
   }
 
@@ -546,7 +551,6 @@ const TABS = [
   { key: "tiers", label: "Tiers", min: "admin" },
   { key: "teams", label: "Teams", min: "admin" },
   { key: "teamformation", label: "Team Formation", min: "admin" },
-      { key: "wildcards", label: "WC Scoring", min: "admin" },
   { key: "fixtures", label: "Fixtures", min: "admin" },
   { key: "standings", label: "Standings", min: "admin" },
   { key: "performance", label: "Performance", min: "admin" },
@@ -685,7 +689,11 @@ function computeTiers(players, tierCounts, tierSize) {
   // Tier bucket size = number of teams.
   // Example: 4 teams = 4 players in every complete tier.
  const suggestedTeams = suggestTeamCount(players);
-const bucketSize = Math.max(1, suggestedTeams);
+  // When team-based tiers are enabled, a complete tier must contain one
+  // player per actual team. Use the real team count passed in from App.
+  // Only fall back to the old participant-based suggestion when there are
+  // no teams yet.
+  const bucketSize = 4; // SAFE FIX: exactly 4 players per tier bucket
   const groups = [
     {
       key: "Male",
@@ -741,53 +749,119 @@ const POINTS_TO_WIN_SET = 11;
 
 const num = (v) => (v === "" || v == null ? 0 : Number(v) || 0);
 
-/* A set is over the moment either player reaches 11. */
+const TT_WILD_CARDS = [
+  { id: "wc1", short: "WC1", name: "Forehand / Backhand" },
+  { id: "wc2", short: "WC2", name: "Race to 7" },
+  { id: "wc3", short: "WC3", name: "Caller starts +5" },
+];
+
+function allWildCards(m) {
+  const w = (m && m.wildCards) || {};
+  return [...(w.a || []), ...(w.b || [])];
+}
+function wildCardsForSet(m, setIndex) {
+  return allWildCards(m).filter((w) => Number(w.set) === setIndex + 1);
+}
+function setTargetForMatch(m, setIndex) {
+  return wildCardsForSet(m, setIndex).some((w) => w.card === "wc2") ? 7 : POINTS_TO_WIN_SET;
+}
+/* A normal set ends at 11. WC2 makes that set a race to 7. */
+function setDoneForMatch(m, setIndex) {
+  const s = (m.sets || [])[setIndex] || { a: 0, b: 0 };
+  const target = setTargetForMatch(m, setIndex);
+  return num(s.a) >= target || num(s.b) >= target;
+}
+/* Kept for older report/import code that has no match context. */
 function setDone(s) {
   return num(s.a) >= POINTS_TO_WIN_SET || num(s.b) >= POINTS_TO_WIN_SET;
 }
-
-/* Index of the set being played, or -1 when all three are done.
-   All three sets are always played, even after a 2-0, because the
-   third set still carries 5 points for whoever takes it. */
-function activeSetIndex(m) {
-  const i = (m.sets || []).findIndex((s) => !setDone(s));
-  return i;
+function setWinnerForMatch(m, setIndex) {
+  if (!setDoneForMatch(m, setIndex)) return null;
+  const s = m.sets[setIndex];
+  if (num(s.a) === num(s.b)) return null;
+  return num(s.a) > num(s.b) ? "a" : "b";
 }
 
-/* ---------- match maths ---------- */
-/* Each set won = 5 points to that player's team.
-   Winning the match (2 of 3 sets) = 25 extra points.
-   All three sets are played out, so a 2-1 loser still banks 5. */
+/* FOOLPROOF WC RESULT: never rely only on a stored `won` flag.
+   The result is derived from the actual finished set score every time.
+   This makes Standings/Bonus recover correctly even for older matches where
+   the Wild Card was saved but its `won` field was not persisted. */
+function resolvedWildCard(m, w, side) {
+  const setIndex = Math.max(0, Number(w && w.set) - 1);
+  if (!w || !Number.isFinite(Number(w.set)) || Number(w.set) < 1 || Number(w.set) > 3) {
+    return { resolved: false, won: null, bonus: 0 };
+  }
+  const winner = setWinnerForMatch(m, setIndex);
+  if (!winner) return { resolved: false, won: null, bonus: 0 };
+  const won = winner === side;
+  return { resolved: true, won, bonus: won ? 20 : 0 };
+}
+
+/* TT Pulse rule: all 3 sets are always played.
+   A 2-0 lead after Set 2 does NOT end the match because Set 3 still awards
+   5 team points to its winner. Match-win points are awarded after Set 3. */
 function matchResult(m) {
   let aSets = 0;
   let bSets = 0;
   let played = 0;
-  (m.sets || []).forEach((s) => {
-    const a = s.a === "" || s.a == null ? null : Number(s.a);
-    const b = s.b === "" || s.b == null ? null : Number(s.b);
-    if (a == null || b == null || a === b) return;
-    if (a >= POINTS_TO_WIN_SET || b >= POINTS_TO_WIN_SET) {
-      played++;
-      if (a > b) aSets++;
-      else bSets++;
-    }
+  (m.sets || []).slice(0, 3).forEach((s, i) => {
+    const w = setWinnerForMatch(m, i);
+    if (!w) return;
+    played++;
+    if (w === "a") aSets++;
+    else bSets++;
   });
-  // Who has taken the match, once two sets are in the bag.
-  const decided = aSets >= 2 || bSets >= 2;
-  // Whether there is any set left to play. Only then is the match over.
-  const complete = played >= (m.sets || []).length;
-  const aPts = aSets * 5 + (decided && aSets > bSets ? 25 : 0);
-  const bPts = bSets * 5 + (decided && bSets > aSets ? 25 : 0);
+
+  const complete = played === 3;
+  const decided = complete;
+  const aSetPts = aSets * 5;
+  const bSetPts = bSets * 5;
+  const aMatchPts = complete && aSets > bSets ? 25 : 0;
+  const bMatchPts = complete && bSets > aSets ? 25 : 0;
+  const aWcBonus = ((m.wildCards || {}).a || []).reduce((sum, w) => sum + resolvedWildCard(m, w, "a").bonus, 0);
+  const bWcBonus = ((m.wildCards || {}).b || []).reduce((sum, w) => sum + resolvedWildCard(m, w, "b").bonus, 0);
+
   return {
-    aSets,
-    bSets,
-    setsPlayed: played,
-    aPts,
-    bPts,
+    aSets, bSets, setsPlayed: played,
+    aSetPts, bSetPts,
+    aMatchPts, bMatchPts,
+    aWcBonus, bWcBonus,
+    aPts: aSetPts + aMatchPts + aWcBonus,
+    bPts: bSetPts + bMatchPts + bWcBonus,
     decided,
     complete,
-    winner: !decided ? null : aSets > bSets ? "a" : "b",
+    winner: !complete ? null : aSets > bSets ? "a" : "b",
   };
+}
+
+function activeSetIndex(m) {
+  if (matchResult(m).complete) return -1;
+  for (let i = 0; i < Math.min(3, (m.sets || []).length); i++) {
+    if (!setDoneForMatch(m, i)) return i;
+  }
+  return -1;
+}
+
+function teamWildCardSummary(data, teamId, day) {
+  const wholeRun = !day || day === "all";
+  const used = { wc1: null, wc2: null, wc3: null };
+  let wins = 0, losses = 0, bonus = 0;
+  (data.matches || []).forEach((m) => {
+    if (!wholeRun && m.date !== day) return;
+    ["a", "b"].forEach((side) => {
+      const tid = side === "a" ? m.teamA : m.teamB;
+      if (String(tid) !== String(teamId)) return;
+      (((m.wildCards || {})[side]) || []).forEach((w) => {
+        const outcome = resolvedWildCard(m, w, side);
+        const displayWc = { ...w, won: outcome.won, bonus: outcome.bonus };
+        if (!used[w.card]) used[w.card] = displayWc;
+        if (outcome.won === true) { wins++; bonus += 20; }
+        else if (outcome.won === false) losses++;
+      });
+    });
+  });
+  const usedCount = Object.values(used).filter(Boolean).length;
+  return { used, usedCount, left: Math.max(0, 3 - usedCount), wins, losses, bonus };
 }
 
 /* ============================================================
@@ -813,8 +887,21 @@ function tierGroupList(data, tiers) {
   CATEGORIES.forEach((c) => {
     const cat = c.key;
     const junior = isKid(cat);
-    const maxTier = Math.max(1, Number(data.tierCounts[cat]) || 1);
-    for (let tier = 1; tier <= maxTier; tier++) {
+    // Do not cap Adult Male/Female at the old manual tier-count setting.
+    // Read the tier numbers that actually exist after calibration/ranking so
+    // every tier appears in Fixtures (Tier 1, 2, 3 ... through the last one).
+    const actualTiers = Array.from(
+      new Set(
+        data.players
+          .filter((p) => p.gender === cat && isCalibrated(p) && tiers[p.id])
+          .map((p) => Number(tiers[p.id].tier))
+          .filter((n) => Number.isFinite(n) && n > 0)
+      )
+    ).sort((a, b) => a - b);
+    const tierNumbers = actualTiers.length
+      ? actualTiers
+      : Array.from({ length: Math.max(1, Number(data.tierCounts[cat]) || 1) }, (_, i) => i + 1);
+    for (const tier of tierNumbers) {
       const members = data.players.filter(
         (p) =>
           p.gender === cat &&
@@ -863,6 +950,69 @@ function candidateDates(data) {
     }
   }
   return Array.from(seen).sort();
+}
+
+
+const _availNorm = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+const _availDigits = (x) => String(x || "").replace(/\D/g, "").slice(-10);
+
+function protectedAvailabilityMatch(player) {
+  const byName = {};
+  const byPhone = {};
+  (TT_GFORM_AVAILABILITY_SOURCE || []).forEach((r) => {
+    const nk = _availNorm(r.first) + _availNorm(r.last);
+    if (nk) (byName[nk] ||= []).push(r);
+    const ph = _availDigits(r.phone);
+    if (ph) (byPhone[ph] ||= []).push(r);
+  });
+
+  const nk =
+    _availNorm(player.first || player.firstName || player.first_name) +
+    _availNorm(player.last || player.lastName || player.last_name);
+  const ph = _availDigits(player.phone);
+  const nameRows = byName[nk] || [];
+
+  if (nameRows.length === 1) return nameRows[0];
+  if (nameRows.length > 1 && ph) {
+    const exact = nameRows.find((r) => _availDigits(r.phone) === ph);
+    if (exact) return exact;
+  }
+  if (ph && (byPhone[ph] || []).length === 1) return byPhone[ph][0];
+  return null;
+}
+
+function buildFixtureAvailability(data) {
+  const start = /^\d{4}-\d{2}-\d{2}$/.test(data.availabilityStart || "")
+    ? data.availabilityStart : "2026-09-19";
+  const end = /^\d{4}-\d{2}-\d{2}$/.test(data.availabilityEnd || "")
+    ? data.availabilityEnd : "2026-09-30";
+  const year = Number(start.slice(0, 4)) || 2026;
+
+  // Keep app/manual availability as fallback.
+  const map = { ...(data.availability || {}) };
+
+  (data.players || []).forEach((p) => {
+    const row = protectedAvailabilityMatch(p);
+    if (!row) return;
+
+    const parsed = readAvailability(
+      { availability: row.availability },
+      year,
+      start,
+      end
+    );
+
+    // For Form-matched players, the protected Form source is authoritative
+    // inside the configured tournament window.
+    const d0 = new Date(start + "T00:00:00");
+    const d1 = new Date(end + "T00:00:00");
+    for (let d = new Date(d0); d <= d1; d.setDate(d.getDate() + 1)) {
+      const key = ymd(d);
+      map[String(p.id) + "|" + key] = parsed[key] || [];
+    }
+  });
+
+  return map;
 }
 
 const slotsFree = (data, pid, date) => data.availability[pid + "|" + date] || [];
@@ -997,6 +1147,246 @@ function dateOptions(data, group, limit = 5) {
         a.date.localeCompare(b.date)
     )
     .slice(0, limit);
+}
+
+/* Round-robin intelligence for one tier. The first choice is the date+slot
+   where players from the largest number of different teams can all attend.
+   Any pair not covered there gets its own suggested makeup date+slot. */
+function tierRoundRobinOptions(data, group, limit = 5) {
+  if (group.junior) return [];
+
+  const teamOf = {};
+  data.teams.forEach((t) => (t.playerIds || []).forEach((id) => (teamOf[id] = t.id)));
+  const members = group.members.filter((p) => teamOf[p.id]);
+  const totalTeams = new Set(members.map((p) => teamOf[p.id])).size;
+  const choose2 = (n) => (n * (n - 1)) / 2;
+
+  const options = [];
+  candidateDates(data).forEach((date) => {
+    SLOTS.forEach((slot) => {
+      const present = members.filter((p) => slotsFree(data, p.id, date).includes(slot));
+      const byTeam = new Map();
+      present.forEach((p) => {
+        const tid = teamOf[p.id];
+        if (!byTeam.has(tid)) byTeam.set(tid, p);
+      });
+      const teamsTogether = byTeam.size;
+      if (!teamsTogether) return;
+      options.push({
+        date,
+        slot,
+        weekend: isWeekend(date),
+        present: Array.from(byTeam.values()).map((p) => p.id),
+        teams: Array.from(byTeam.keys()),
+        teamsTogether,
+        totalTeams,
+        possibleMatches: choose2(teamsTogether),
+        totalMatches: choose2(totalTeams),
+      });
+    });
+  });
+
+  options.sort((a, b) =>
+    b.teamsTogether - a.teamsTogether ||
+    b.possibleMatches - a.possibleMatches ||
+    Number(b.weekend) - Number(a.weekend) ||
+    a.date.localeCompare(b.date) ||
+    SLOTS.indexOf(a.slot) - SLOTS.indexOf(b.slot)
+  );
+
+  return options.slice(0, limit);
+}
+
+
+function tierCommonGreenSchedule(data, group) {
+  if (!group || group.junior) return null;
+
+  const teamOf = {};
+  const teamName = {};
+  (data.teams || []).forEach((t) => {
+    teamName[String(t.id)] = t.name || "Team";
+    (t.playerIds || []).forEach((id) => {
+      teamOf[String(id)] = String(t.id);
+    });
+  });
+
+  // One same-tier player per final team.
+  const byTeam = new Map();
+  (group.members || []).forEach((p) => {
+    const tid = teamOf[String(p.id)];
+    if (tid && !byTeam.has(tid)) byTeam.set(tid, p);
+  });
+
+  const entries = Array.from(byTeam.entries());
+  if (entries.length < 2) {
+    return {
+      totalTeams: entries.length,
+      totalMatches: 0,
+      main: null,
+      sittings: [],
+      pairFixtures: [],
+      unscheduled: [],
+    };
+  }
+
+  const pairs = [];
+  for (let i = 0; i < entries.length; i++) {
+    for (let j = i + 1; j < entries.length; j++) {
+      const [teamA, a] = entries[i];
+      const [teamB, b] = entries[j];
+      pairs.push({
+        key: [teamA, teamB].sort().join("|"),
+        teamA, teamB, a, b,
+      });
+    }
+  }
+
+  const candidates = [];
+  candidateDates(data).forEach((date) => {
+    SLOTS.forEach((slot) => {
+      const covered = pairs.filter((pair) =>
+        slotsFree(data, pair.a.id, date).includes(slot) &&
+        slotsFree(data, pair.b.id, date).includes(slot)
+      );
+      if (!covered.length) return;
+
+      const teamSet = new Set();
+      covered.forEach((p) => {
+        teamSet.add(p.teamA);
+        teamSet.add(p.teamB);
+      });
+
+      candidates.push({
+        date,
+        slot,
+        coveredKeys: covered.map((p) => p.key),
+        pairCount: covered.length,
+        teamCount: teamSet.size,
+        weekend: isWeekend(date),
+      });
+    });
+  });
+
+  candidates.sort((a, b) =>
+    b.pairCount - a.pairCount ||
+    b.teamCount - a.teamCount ||
+    Number(b.weekend) - Number(a.weekend) ||
+    a.date.localeCompare(b.date) ||
+    SLOTS.indexOf(a.slot) - SLOTS.indexOf(b.slot)
+  );
+
+  const remaining = new Set(pairs.map((p) => p.key));
+  const sittings = [];
+
+  // Greedy set cover: each next sitting covers the most still-unscheduled
+  // same-tier pairings. This minimizes extra playing sittings in practice.
+  while (remaining.size) {
+    let best = null;
+
+    candidates.forEach((c) => {
+      const uncovered = c.coveredKeys.filter((k) => remaining.has(k));
+      if (!uncovered.length) return;
+
+      const score = {
+        ...c,
+        uncovered,
+        uncoveredCount: uncovered.length,
+      };
+
+      if (
+        !best ||
+        score.uncoveredCount > best.uncoveredCount ||
+        (score.uncoveredCount === best.uncoveredCount && score.teamCount > best.teamCount) ||
+        (score.uncoveredCount === best.uncoveredCount &&
+          score.teamCount === best.teamCount &&
+          Number(score.weekend) > Number(best.weekend)) ||
+        (score.uncoveredCount === best.uncoveredCount &&
+          score.teamCount === best.teamCount &&
+          Number(score.weekend) === Number(best.weekend) &&
+          (score.date < best.date ||
+            (score.date === best.date && SLOTS.indexOf(score.slot) < SLOTS.indexOf(best.slot))))
+      ) {
+        best = score;
+      }
+    });
+
+    if (!best) break;
+
+    sittings.push(best);
+    best.uncovered.forEach((k) => remaining.delete(k));
+  }
+
+  const pairFixtures = [];
+  sittings.forEach((s, sittingIndex) => {
+    s.uncovered.forEach((key) => {
+      const pair = pairs.find((p) => p.key === key);
+      if (!pair) return;
+      pairFixtures.push({
+        ...pair,
+        date: s.date,
+        slot: s.slot,
+        sittingIndex,
+      });
+    });
+  });
+
+  const unscheduled = pairs.filter((p) => remaining.has(p.key));
+  return {
+    totalTeams: entries.length,
+    totalMatches: pairs.length,
+    main: sittings[0] || null,
+    sittings,
+    pairFixtures,
+    unscheduled,
+  };
+}
+
+function tierMakeupSuggestions(data, group, mainOption) {
+  if (!mainOption || group.junior) return [];
+  const teamOf = {};
+  const teamName = {};
+  data.teams.forEach((t) => {
+    teamName[t.id] = t.name || 'Team';
+    (t.playerIds || []).forEach((id) => (teamOf[id] = t.id));
+  });
+
+  const byTeam = new Map();
+  group.members.forEach((p) => {
+    const tid = teamOf[p.id];
+    if (tid && !byTeam.has(tid)) byTeam.set(tid, p);
+  });
+  const entries = Array.from(byTeam.entries());
+  const mainTeams = new Set(mainOption.teams || []);
+  const out = [];
+
+  for (let i = 0; i < entries.length; i++) {
+    for (let j = i + 1; j < entries.length; j++) {
+      const [teamA, a] = entries[i];
+      const [teamB, b] = entries[j];
+      if (mainTeams.has(teamA) && mainTeams.has(teamB)) continue;
+
+      let suggestion = null;
+      candidateDates(data).some((date) => {
+        return SLOTS.some((slot) => {
+          if (date === mainOption.date && slot === mainOption.slot) return false;
+          if (slotsFree(data, a.id, date).includes(slot) && slotsFree(data, b.id, date).includes(slot)) {
+            suggestion = { date, slot };
+            return true;
+          }
+          return false;
+        });
+      });
+
+      out.push({
+        teamA, teamB,
+        teamAName: teamName[teamA] || 'Team A',
+        teamBName: teamName[teamB] || 'Team B',
+        playerA: a.id, playerB: b.id,
+        suggestion,
+      });
+    }
+  }
+  return out;
 }
 
 /* Turn tiers, teams and the plan into an actual list of fixtures. */
@@ -2072,7 +2462,7 @@ function PlayersTab({ data, update, setData, tiers, notify, role }) {
   const [form, setForm] = useState(blank);
   const [editing, setEditing] = useState(null);
   const [q, setQ] = useState("");
-  const [catFilter, setCatFilter] = useState("all");
+  const [catFilter, setCatFilter] = useState("Male");
   // Detect possible duplicate players by First Name + Last Name
 const duplicateGroups = (() => {
   const groups = {};
@@ -3330,10 +3720,7 @@ function TiersTab({ data, update, tiers, notify }) {
           byTier[t] = byTier[t] || [];
           byTier[t].push(p);
         });
-      const bucketSize = Math.max(
-  1,
-  teamCount || suggestTeamCount(data.players)
-);
+      const bucketSize = 4; // SAFE FIX: tier display always shows groups of 4
         return (
           <section className="card" key={c.key}>
             <header className="card-head">
@@ -4002,6 +4389,7 @@ function ScoringTab({ data, update, notify }) {
   const [dutyPick, setDutyPick] = useState("");
   const [dutyTyped, setDutyTyped] = useState("");
   const [scorer, setScorer] = useState("");
+  const [wcPick, setWcPick] = useState({});
 
   const teamById = (id) => data.teams.find((t) => t.id === id);
   const roster = (id) => {
@@ -4065,6 +4453,7 @@ function ScoringTab({ data, update, notify }) {
       status: "live",
       fixtureId: f.id,
       scorer: scorer || (dutyFor(f.date || todayStr)[0] || {}).name || "",
+      wildCards: { a: [], b: [] },
     };
     update((d) => ({
       ...d,
@@ -4134,10 +4523,96 @@ function ScoringTab({ data, update, notify }) {
       ],
       status: "live",
       scorer: scorer || (dutyFor(ymd(new Date()))[0] || {}).name || "",
+      wildCards: { a: [], b: [] },
     };
     update((d) => ({ ...d, matches: [m, ...d.matches] }));
     setPlayerA("");
     setPlayerB("");
+  };
+
+  const cardUsedByTeam = (teamId, cardId) =>
+    (data.matches || []).some((m) =>
+      ["a", "b"].some((side) => {
+        const tid = side === "a" ? m.teamA : m.teamB;
+        return String(tid) === String(teamId) &&
+          ((((m.wildCards || {})[side]) || []).some((w) => w.card === cardId));
+      })
+    );
+
+  const wildCardWindowOpen = (m, setIndex) => {
+    const s = (m.sets || [])[setIndex] || { a: "0", b: "0" };
+    const cards = wildCardsForSet(m, setIndex);
+
+    // Before the first rally, the only non-zero opening score allowed is
+    // the +5 created by WC3 for the calling side.
+    const expectedA = cards.some((w) => w.card === "wc3" && w.side === "a") ? 5 : 0;
+    const expectedB = cards.some((w) => w.card === "wc3" && w.side === "b") ? 5 : 0;
+
+    return num(s.a) === expectedA && num(s.b) === expectedB;
+  };
+
+  const canCallWildCard = (m, setIndex, side) => {
+    if (!m || setIndex < 0 || matchResult(m).complete) return false;
+    if (!wildCardWindowOpen(m, setIndex)) return false;
+
+    // One Wild Card per team in a set. The other team may still call
+    // its own card before the first rally, even if WC3 has already made it 5-0.
+    const ownAlready = wildCardsForSet(m, setIndex).some((w) => w.side === side);
+    return !ownAlready;
+  };
+
+  const setWcChoice = (mid, side, patch) => {
+    const key = mid + "|" + side;
+    setWcPick((old) => ({ ...old, [key]: { ...(old[key] || { card: "", detail: "Forehand" }), ...patch } }));
+  };
+
+  const declareWildCard = (mid, side) => {
+    const key = mid + "|" + side;
+    const choice = wcPick[key] || {};
+    if (!choice.card) { notify("Choose WC1, WC2 or WC3 first."); return; }
+    const m = data.matches.find((x) => x.id === mid);
+    if (!m || m.status !== "live") return;
+    const i = activeSetIndex(m);
+    if (i < 0) { notify("The match is already complete."); return; }
+
+    if (!canCallWildCard(m, i, side)) {
+      const ownAlready = wildCardsForSet(m, i).some((w) => w.side === side);
+      notify(ownAlready
+        ? `This team has already called a Wild Card in Set ${i + 1}.`
+        : "Wild Card can only be called at the beginning of a set, before the first rally.");
+      return;
+    }
+
+    const teamId = side === "a" ? m.teamA : m.teamB;
+    if (cardUsedByTeam(teamId, choice.card)) {
+      notify(`${choice.card.toUpperCase()} has already been used by this team.`);
+      return;
+    }
+
+    update((d) => ({
+      ...d,
+      matches: d.matches.map((x) => {
+        if (x.id !== mid) return x;
+        const next = JSON.parse(JSON.stringify(x));
+        next.wildCards = next.wildCards || { a: [], b: [] };
+        next.wildCards[side] = next.wildCards[side] || [];
+        next.wildCards[side].push({
+          card: choice.card,
+          set: i + 1,
+          detail: choice.card === "wc1" ? (choice.detail || "Forehand") : "",
+          side,
+          won: null,
+          bonus: 0,
+          declaredAt: Date.now()
+        });
+        if (choice.card === "wc3") {
+          next.sets[i][side] = "5";
+        }
+        return next;
+      })
+    }));
+    setWcChoice(mid, side, { card: "" });
+    notify(`${choice.card.toUpperCase()} called for Set ${i + 1}.`);
   };
 
   const addPoint = (mid, side, delta) => {
@@ -4147,25 +4622,61 @@ function ScoringTab({ data, update, notify }) {
         if (m.id !== mid) return m;
         const i = activeSetIndex(m);
         if (i === -1) return m;
-        const sets = m.sets.map((s, idx) =>
-          idx === i ? { ...s, [side]: String(Math.max(0, num(s[side]) + delta)) } : s
-        );
-        const after = { ...m, sets };
-        // The match closes itself once someone has taken two sets.
+        const target = setTargetForMatch(m, i);
+        const sets = m.sets.map((s, idx) => {
+          if (idx !== i) return s;
+          const current = num(s[side]);
+          const nextValue = delta > 0 ? Math.min(target, current + delta) : Math.max(0, current + delta);
+          return { ...s, [side]: String(nextValue) };
+        });
+        let after = { ...m, sets };
+        if (setDoneForMatch(after, i)) {
+          const sw = setWinnerForMatch(after, i);
+          const wc = JSON.parse(JSON.stringify(after.wildCards || { a: [], b: [] }));
+          ["a", "b"].forEach((wcSide) => {
+            wc[wcSide] = (wc[wcSide] || []).map((w) =>
+              Number(w.set) === i + 1
+                ? { ...w, won: sw === wcSide, bonus: sw === wcSide ? 20 : 0, resolved: true, resolvedAt: Date.now() }
+                : w
+            );
+          });
+          after = { ...after, wildCards: wc };
+        }
         return { ...after, status: matchResult(after).complete ? "final" : after.status };
       }),
     }));
   };
 
   const setScore = (mid, i, side, value) => {
-    const v = value === "" ? "0" : String(Math.max(0, Math.min(99, Number(value) || 0)));
     update((d) => ({
       ...d,
-      matches: d.matches.map((m) =>
-        m.id === mid
-          ? { ...m, sets: m.sets.map((s, idx) => (idx === i ? { ...s, [side]: v } : s)) }
-          : m
-      ),
+      matches: d.matches.map((m) => {
+        if (m.id !== mid) return m;
+        if (setDoneForMatch(m, i)) return m; // completed set is frozen
+
+        const target = setTargetForMatch(m, i);
+        const v = value === "" ? 0 : Math.max(0, Math.min(target, Number(value) || 0));
+        const sets = m.sets.map((s, idx) =>
+          idx === i ? { ...s, [side]: String(v) } : s
+        );
+
+        let after = { ...m, sets };
+
+        if (setDoneForMatch(after, i)) {
+          const sw = setWinnerForMatch(after, i);
+          const wc = JSON.parse(JSON.stringify(after.wildCards || { a: [], b: [] }));
+          ["a", "b"].forEach((wcSide) => {
+            wc[wcSide] = (wc[wcSide] || []).map((w) =>
+              Number(w.set) === i + 1
+                ? { ...w, won: sw === wcSide, bonus: sw === wcSide ? 20 : 0, resolved: true, resolvedAt: Date.now() }
+                : w
+            );
+          });
+          after = { ...after, wildCards: wc };
+        }
+
+        return { ...after, status: matchResult(after).complete ? "final" : after.status };
+      }),
     }));
   };
 
@@ -4379,7 +4890,7 @@ function ScoringTab({ data, update, notify }) {
       <section className="card">
         <header className="card-head">
           <h2>Set up a match</h2>
-          <span className="muted">Best of 3 · 5 team points per set won · 25 bonus for the match</span>
+          <span className="muted">All 3 sets are played · +5 per set won · +25 match win · +20 if the called Wild Card set is won</span>
         </header>
         <div className="grid-form four">
           <Field label="Team A">
@@ -4507,10 +5018,57 @@ function ScoringTab({ data, update, notify }) {
                 </div>
               </div>
 
+              {active >= 0 && !r.complete ? (
+                <div className="wc-live-control">
+                  <div className="wc-live-title">
+                    <b>🎟️ Wild Card — available before the first rally of Set {active + 1}</b>
+                    <span className="muted">Successful Wild Card set = +20 team points</span>
+                  </div>
+                  <div className="wc-live-grid">
+                    {["a","b"].map((side) => {
+                      const tid = side === "a" ? m.teamA : m.teamB;
+                      const team = teamById(tid);
+                      const key = m.id + "|" + side;
+                      const choice = wcPick[key] || { card:"", detail:"Forehand" };
+                      const already = wildCardsForSet(m, active).filter((w) => w.side === side);
+                      const canCall = canCallWildCard(m, active, side);
+                      return (
+                        <div className="wc-live-side" key={side}>
+                          <strong>{team ? team.name : side.toUpperCase()}</strong>
+                          {already.length ? (
+                            <span className="wc-active-chip">{already.map(w => w.card.toUpperCase()).join(", ")} ACTIVE</span>
+                          ) : (
+                            <>
+                              <select value={choice.card} disabled={!canCall}
+                                onChange={(e)=>setWcChoice(m.id,side,{card:e.target.value})}>
+                                <option value="">Choose Wild Card</option>
+                                {TT_WILD_CARDS.map((w)=>(
+                                  <option key={w.id} value={w.id} disabled={cardUsedByTeam(tid,w.id)}>
+                                    {w.short} — {w.name}{cardUsedByTeam(tid,w.id) ? " — USED" : ""}
+                                  </option>
+                                ))}
+                              </select>
+                              {choice.card === "wc1" ? (
+                                <select value={choice.detail || "Forehand"} disabled={!canCall}
+                                  onChange={(e)=>setWcChoice(m.id,side,{detail:e.target.value})}>
+                                  <option>Forehand</option><option>Backhand</option>
+                                </select>
+                              ) : null}
+                              <button className="btn btn-primary btn-tiny" disabled={!canCall || !choice.card}
+                                onClick={()=>declareWildCard(m.id,side)}>Call Wild Card</button>
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+
               {active >= 0 ? (
                 <div className="rally">
                   <div className="rally-label">
-                    Set {active + 1} · first to {POINTS_TO_WIN_SET}
+                    Set {active + 1} · {wildCardsForSet(m, active).some(w => w.card === "wc2") ? "WC2 RACE TO 7" : "first to 11"}
                     {r.decided ? " · match already won, but this set is still worth 5" : ""}
                   </div>
                   <div className="rally-grid">
@@ -4552,7 +5110,7 @@ function ScoringTab({ data, update, notify }) {
 
               <div className="sets-row">
                 {m.sets.map((s, i) => {
-                  const done = setDone(s);
+                  const done = setDoneForMatch(m, i);
                   return (
                     <div className={"set-box" + (i === active ? " current" : "") + (done ? " done" : "")} key={i}>
                       <span className="set-label">
@@ -4600,53 +5158,55 @@ function useStandings(data) {
 function computeStandings(data, day) {
   const wholeRun = !day || day === "all";
   const table = data.teams.map((t) => ({
-    id: t.id,
-    name: t.name,
-    played: 0,
-    matchWins: 0,
-    matchLosses: 0,
-    setsWon: 0,
-    setsLost: 0,
-    setsPlayed: 0,
-    setPoints: 0,
-    matchPoints: 0,
-    manualBonus: 0,
-    points: 0,
+    id: t.id, name: t.name,
+    played: 0, matchWins: 0, matchLosses: 0,
+    setsWon: 0, setsLost: 0, setsPlayed: 0,
+    setPoints: 0, matchPoints: 0,
+    wc1: null, wc2: null, wc3: null,
+    wcWins: 0, wcLosses: 0, wcBonus: 0, wcLeft: 3,
+    manualBonus: 0, points: 0,
   }));
   const byId = {};
   table.forEach((r) => (byId[r.id] = r));
-  data.matches.forEach((m) => {
+
+  (data.matches || []).forEach((m) => {
     if (!wholeRun && m.date !== day) return;
     const r = matchResult(m);
-    const A = byId[m.teamA];
-    const B = byId[m.teamB];
+    const A = byId[m.teamA], B = byId[m.teamB];
     if (!A || !B) return;
-    A.played++;
-    B.played++;
-    A.setsWon += r.aSets;
-    B.setsWon += r.bSets;
-    A.setsLost += r.bSets;
-    B.setsLost += r.aSets;
-    A.setsPlayed += r.setsPlayed;
-    B.setsPlayed += r.setsPlayed;
-    A.setPoints += r.aSets * 5;
-    B.setPoints += r.bSets * 5;
-    if (r.winner === "a") {
-      A.matchWins++;
-      A.matchPoints += 25;
-      B.matchLosses++;
-    }
-    if (r.winner === "b") {
-      B.matchWins++;
-      B.matchPoints += 25;
-      A.matchLosses++;
-    }
+
+    A.played++; B.played++;
+    A.setsWon += r.aSets; B.setsWon += r.bSets;
+    A.setsLost += r.bSets; B.setsLost += r.aSets;
+    A.setsPlayed += r.setsPlayed; B.setsPlayed += r.setsPlayed;
+    A.setPoints += r.aSetPts; B.setPoints += r.bSetPts;
+    A.matchPoints += r.aMatchPts; B.matchPoints += r.bMatchPts;
+    if (r.winner === "a") { A.matchWins++; B.matchLosses++; }
+    if (r.winner === "b") { B.matchWins++; A.matchLosses++; }
+
+    // Wild Card bonus is authoritative from matchResult(), which derives the
+    // result from the completed set score. This prevents a missing/stale stored
+    // `won` flag from dropping a valid +20 bonus.
+    A.wcBonus += r.aWcBonus;
+    B.wcBonus += r.bWcBonus;
+
+    [["a", A], ["b", B]].forEach(([side, row]) => {
+      (((m.wildCards || {})[side]) || []).forEach((w) => {
+        const outcome = resolvedWildCard(m, w, side);
+        const displayWc = { ...w, won: outcome.won, bonus: outcome.bonus };
+        if (!row[w.card]) row[w.card] = displayWc;
+        if (outcome.won === true) row.wcWins++;
+        else if (outcome.won === false) row.wcLosses++;
+      });
+    });
   });
+
   table.forEach((t) => {
+    t.wcLeft = Math.max(0, 3 - [t.wc1,t.wc2,t.wc3].filter(Boolean).length);
     t.manualBonus = wholeRun ? Number((data.bonuses || {})[t.id]) || 0 : 0;
-    t.points = t.setPoints + t.matchPoints + t.manualBonus;
+    t.points = t.setPoints + t.matchPoints + t.wcBonus + t.manualBonus;
   });
-  table.sort((a, b) => b.points - a.points || b.setsWon - a.setsWon || a.name.localeCompare(b.name));
+  table.sort((a, b) => b.points - a.points || b.matchWins - a.matchWins || b.setsWon - a.setsWon || a.name.localeCompare(b.name));
   return table;
 }
 
@@ -4704,34 +5264,95 @@ function StandingsTab({ data, update, notify }) {
   const [ageFilter, setAgeFilter] = useState("adult");
   const table = useStandings(data);
   const columns = [
-    "Rank",
-    "Team",
-    "Matches",
-    "Sets Played",
-    "Sets Won",
-    "Sets Lost",
-    "Set Points (5 each)",
-    "Match Wins",
-    "Match Losses",
-    "Match Points (25 each)",
-    "Bonus",
-    "Total Points",
+    "Rank","Team","Matches","Sets W-L","Set Points",
+    "Match Wins","Match Losses","Match Points (25 each)",
+    "Wild Cards","Wild Card Bonus","Other Bonus","Total Points",
   ];
-  const rows = table.map((t, i) => [
-    i + 1,
-    t.name,
-    t.played,
-    t.setsPlayed,
-    t.setsWon,
-    t.setsLost,
-    t.setPoints,
-    t.matchWins,
-    t.matchLosses,
-    t.matchPoints,
-    t.manualBonus || "",
-    t.points,
-  ]);
+  const wcText = (w) => !w ? "Left" : w.won === true ? "Used · Won" : w.won === false ? "Used · Lost" : "Active";
+  const rows = table.map((t, i) => {
+    const cards = [t.wc1,t.wc2,t.wc3];
+    const cardMini = cards.map((w, idx) => {
+      if (!w) return `WC${idx+1}: Left`;
+      return `WC${idx+1}: ${w.won === true ? "Won" : w.won === false ? "Lost" : "Active"}`;
+    }).join(" · ");
+    return [
+      i + 1, t.name, t.played, `${t.setsWon}-${t.setsLost}`, t.setPoints,
+      t.matchWins, t.matchLosses, t.matchPoints,
+      cardMini,
+      t.wcBonus, t.manualBonus || "", t.points,
+    ];
+  });
   const top = table[0];
+
+  const wcUsedDetails = (t) => {
+    const used = [t.wc1,t.wc2,t.wc3].filter(Boolean);
+    if (!used.length) return "No Wild Card used yet.";
+    return used.map((w) => {
+      const name =
+        w.card === "wc1" ? `WC1 — ${w.detail || "Forehand / Backhand"}` :
+        w.card === "wc2" ? "WC2 — Race to 7" :
+        "WC3 — Caller starts +5";
+      const result = w.won === true ? "Won (+20)" : w.won === false ? "Lost (+0)" : "Active";
+      return `${name} · Set ${w.set} · ${result}`;
+    }).join(" | ");
+  };
+
+  const wcRemainingCards = (t) => {
+    const count = Math.max(0, t.wcLeft);
+    return (
+      <div className="wc-visual-wrap">
+        <div className="wc-visual-cards" title={`${count} Wild Card${count === 1 ? "" : "s"} left`}>
+          {Array.from({length: count}).map((_,i) => (
+            <span className="wc-playing-card" key={i}>★</span>
+          ))}
+          
+        </div>
+        {3 - count > 0 ? (
+          <button
+            type="button"
+            className="wc-used-link"
+            onClick={() => notify(wcUsedDetails(t))}
+            title="Click to see which Wild Card was used"
+          >
+            ⓘ
+          </button>
+        ) : (
+          <span className="wc-unused-note">0 used</span>
+        )}
+      </div>
+    );
+  };
+
+  const latestTeamSetScores = (teamId) => {
+    const matches = (data.matches || [])
+      .filter((m) => {
+        const r = matchResult(m);
+        return r.complete && (m.teamA === teamId || m.teamB === teamId);
+      })
+      .slice()
+      .sort((a,b) => String(b.completedAt || b.date || b.id || "").localeCompare(String(a.completedAt || a.date || a.id || "")));
+
+    const m = matches[0];
+    if (!m) return <span className="muted">—</span>;
+
+    const side = m.teamA === teamId ? "a" : "b";
+    return (
+      <div className="set-score-list" title="Latest completed match set scores">
+        {(m.sets || []).map((s, idx) => {
+          if (!setDoneForMatch(m, idx)) return null;
+          const a = Number(s.a || 0), b = Number(s.b || 0);
+          const mine = side === "a" ? a : b;
+          const opp = side === "a" ? b : a;
+          const won = mine > opp;
+          return (
+            <span className={`set-score-pill ${won ? "won" : "lost"}`} key={idx}>
+              {mine}–{opp}
+            </span>
+          );
+        })}
+      </div>
+    );
+  };
 
   const setBonus = (teamId, value) => {
     const v = value.trim();
@@ -4766,7 +5387,10 @@ function StandingsTab({ data, update, notify }) {
         <header className="card-head">
           <div>
             <span className="eyebrow">Work group</span>
-            <h2>Standings view</h2>
+            <h2>Standings · scores + Wild Cards</h2>
+            <div className="standings-formula">
+              Set Pts = set wins × 5 · Match win = +25 · Successful Wild Card = +20 Bonus
+            </div>
           </div>
           <select value={ageFilter} onChange={(e) => setAgeFilter(e.target.value)}>
             <option value="adult">Adults only</option>
@@ -4782,7 +5406,7 @@ function StandingsTab({ data, update, notify }) {
         columns={columns}
         rows={rows}
         onImport={onImport}
-        note="Set and match points come from played matches. Bonus is yours to set."
+        note="Set Pts and Match Pts come from played matches. Wild Card Bonus is automatic: +20 for every Wild Card whose set is won. This +20 appears in Bonus and is included in Total. Other Bonus is manual."
         notify={notify}
       />
 
@@ -4804,7 +5428,7 @@ function StandingsTab({ data, update, notify }) {
           <section className="card">
             <header className="card-head">
               <h2>Team standings</h2>
-              <span className="muted">5 per set won · 25 for the match · bonus as you decide</span>
+              <span className="muted">5 per set won · 25 match win · +20 successful Wild Card set</span>
             </header>
             <div className="table-scroll">
               <table className="standings">
@@ -4813,14 +5437,21 @@ function StandingsTab({ data, update, notify }) {
                     <th>#</th>
                     <th>Team</th>
                     <th title="Matches played">M</th>
-                    <th title="Sets played">Sets</th>
-                    <th title="Sets won">W</th>
-                    <th title="Sets lost">L</th>
-                    <th title="5 points for every set won">Set pts</th>
+                    <th title="Sets won–lost">Sets</th>
+                    <th title="Latest completed match: score in each set">Set Scores</th>
+                    <th title="5 points for every set won">Set Pts</th>
                     <th title="Matches won">Match W</th>
                     <th title="Matches lost">Match L</th>
                     <th title="25 points for every match won">Match pts</th>
-                    <th>Bonus</th>
+                    <th title="Each team starts with 3 Wild Cards"><span className="wc-head">Wild Cards
+      <span className="wc-head-deck" aria-label="3 Wild Cards">
+        <span className="wc-playing-card">★</span>
+        <span className="wc-playing-card">★</span>
+        <span className="wc-playing-card">★</span>
+      </span>
+    </span></th>
+                    <th title="20 points for each successful Wild Card">Bonus</th>
+                    <th>Other Bonus</th>
                     <th>Total</th>
                   </tr>
                 </thead>
@@ -4830,13 +5461,20 @@ function StandingsTab({ data, update, notify }) {
                       <td className="mono rank">{i + 1}</td>
                       <td className="strong">{t.name}</td>
                       <td className="mono">{t.played}</td>
-                      <td className="mono muted">{t.setsPlayed}</td>
-                      <td className="mono">{t.setsWon}</td>
-                      <td className="mono muted">{t.setsLost}</td>
+                      <td className="mono">
+                        <span className="set-record" title={`${t.setsWon} sets won · ${t.setsLost} sets lost`}>
+                          <span className={t.setsWon > t.setsLost ? "set-record-winner" : ""}>{t.setsWon}</span>
+                          <span className="set-record-dash">–</span>
+                          <span className={t.setsLost > t.setsWon ? "set-record-winner" : ""}>{t.setsLost}</span>
+                        </span>
+                      </td>
+                      <td>{latestTeamSetScores(t.id)}</td>
                       <td className="mono">{t.setPoints}</td>
                       <td className="mono">{t.matchWins}</td>
                       <td className="mono muted">{t.matchLosses}</td>
                       <td className="mono">{t.matchPoints}</td>
+                      <td>{wcRemainingCards(t)}</td>
+                      <td className="mono">{t.wcBonus}</td>
                       <td>
                         <input
                           className="mono bonus-input"
@@ -4844,7 +5482,7 @@ function StandingsTab({ data, update, notify }) {
                           value={(data.bonuses || {})[t.id] == null ? "" : String(data.bonuses[t.id])}
                           onChange={(e) => setBonus(t.id, e.target.value)}
                           placeholder="—"
-                          aria-label={"Bonus points for " + t.name}
+                          aria-label={"Other bonus points for " + t.name}
                         />
                       </td>
                       <td className="mono total">{t.points}</td>
@@ -5271,6 +5909,21 @@ function TeamFormationTab({ data, update, tiers, role, notify }) {
             teams:finalTeams,
             source:"supabase"
           }}));
+          update(d=>{
+            const adultIds=new Set(members.map(m=>String(m.player_id)));
+            const keep=(d.teams||[]).filter(t=>{
+              if(["red","blue","black","orange"].includes(String(t.id).toLowerCase())) return false;
+              const ids=(t.playerIds||[]).map(String);
+              return !ids.some(id=>adultIds.has(id));
+            });
+            const synced=META.map(meta=>({
+              id:meta.id,
+              name:meta.name,
+              ageGroup:"adult",
+              playerIds:(members||[]).filter(m=>String(m.team_id)===meta.id).map(m=>String(m.player_id))
+            }));
+            return {...d,teams:[...keep,...synced]};
+          });
         } else {
           // A local demo acceptance is not a final cloud acceptance.
           setDraft(d=>d.accepted ? {...d,accepted:null,confirmChoice:null} : d);
@@ -5484,6 +6137,21 @@ function TeamFormationTab({ data, update, tiers, role, notify }) {
         teams:finalTeams,
         source:"supabase"
       }}));
+      update(d=>{
+        const adultIds=new Set(members.map(m=>String(m.player_id)));
+        const keep=(d.teams||[]).filter(t=>{
+          if(["red","blue","black","orange"].includes(String(t.id).toLowerCase())) return false;
+          const ids=(t.playerIds||[]).map(String);
+          return !ids.some(id=>adultIds.has(id));
+        });
+        const synced=META.map(meta=>({
+          id:meta.id,
+          name:meta.name,
+          ageGroup:"adult",
+          playerIds:members.filter(m=>String(m.team_id)===meta.id).map(m=>String(m.player_id))
+        }));
+        return {...d,teams:[...keep,...synced]};
+      });
       notify("Option "+which+" permanently saved to Supabase. Final Adult Teams Formed and locked.");
     } catch(err) {
       console.error(err);
@@ -5702,35 +6370,364 @@ function TeamFormationTab({ data, update, tiers, role, notify }) {
 function FixturesTab({ data, update, tiers, notify }) {
   const [crossTier, setCrossTier] = useState(true);
   const [dayFilter, setDayFilter] = useState("all");
-  const [catFilter, setCatFilter] = useState("all");
+  const [catFilter, setCatFilter] = useState("Male");
   const [kindFilter, setKindFilter] = useState("all");
   const [threshold, setThreshold] = useState(DEFAULT_COVERAGE);
   const [openTier, setOpenTier] = useState(null);
 
-  const groups = useMemo(() => tierGroupList(data, tiers), [data.players, data.teams, data.tierCounts, tiers]);
+  // FINAL FIXTURES SOURCE
+  // Adult fixtures are built directly from the accepted Team Formation rows.
+  // This intentionally does NOT rely on data.teams or p.gender for Adult Male/Female.
+  const [formationMembers, setFormationMembers] = useState([]);
+  const [formationStatus, setFormationStatus] = useState("loading");
+
+  const formationTeamMeta = [
+    { id: "red", name: "Red" },
+    { id: "blue", name: "Blue" },
+    { id: "black", name: "Black" },
+    { id: "orange", name: "Orange" },
+  ];
+
+  const rowsFromAccepted = (accepted) => {
+    const rows = [];
+    if (!accepted || !accepted.teams) return rows;
+    Object.entries(accepted.teams).forEach(([teamId, cards]) => {
+      (cards || []).forEach((card) => {
+        if (!card || !card.id) return;
+        rows.push({
+          team_id: String(teamId),
+          player_id: String(card.id),
+          player_name: card.name || "",
+          tier_group: card.group || "",
+          tier_number: Number(card.tier) || null,
+        });
+      });
+    });
+    return rows;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    // Show locally accepted teams immediately while the cloud check runs.
+    try {
+      const saved = JSON.parse(localStorage.getItem("tt_pulse_team_formation_final_v1") || "null");
+      const localRows = rowsFromAccepted(saved && saved.accepted);
+      if (localRows.length) {
+        setFormationMembers(localRows);
+        setFormationStatus("local");
+      }
+    } catch (e) {}
+
+    async function loadFinalFormation() {
+      try {
+        const C = window.TT_CLOUD;
+        if (!C || !C.url || !C.anonKey) {
+          if (!cancelled) setFormationStatus((s) => s === "local" ? s : "no-cloud");
+          return;
+        }
+        const base = C.url.replace(/\/+$/, "");
+
+        // Use the SAME authenticated request path used by Team Formation.
+        const controlRes = await fetch(
+          base + "/rest/v1/tt_team_formation?id=eq.current&select=accepted_option,is_locked,accepted_at",
+          { headers: { apikey: C.anonKey, Authorization: "Bearer " + C.anonKey } }
+        );
+        if (!controlRes.ok) throw new Error("Team Formation control " + controlRes.status);
+        const controlRows = await controlRes.json();
+        const control = controlRows && controlRows[0];
+
+        if (!control || !control.is_locked) {
+          if (!cancelled) setFormationStatus((s) => s === "local" ? s : "not-formed");
+          return;
+        }
+
+        const membersRes = await fetch(
+          base + "/rest/v1/tt_team_members?select=team_id,player_id,tier_group,tier_number&order=tier_group.asc,tier_number.asc,id.asc",
+          { headers: { apikey: C.anonKey, Authorization: "Bearer " + C.anonKey } }
+        );
+        if (!membersRes.ok) throw new Error("Final team members " + membersRes.status);
+        const cloudRows = await membersRes.json();
+
+        if (!cancelled) {
+          setFormationMembers(Array.isArray(cloudRows) ? cloudRows.map((r) => ({
+            team_id: String(r.team_id || ""),
+            player_id: String(r.player_id || ""),
+            tier_group: r.tier_group || "",
+            tier_number: Number(r.tier_number) || null,
+          })) : []);
+          setFormationStatus("cloud");
+        }
+      } catch (err) {
+        console.error("Final Fixtures Team Formation load failed", err);
+        if (!cancelled) setFormationStatus((s) => s === "local" ? s : "error");
+      }
+    }
+
+    loadFinalFormation();
+    return () => { cancelled = true; };
+  }, [data.players]);
+
+  const playerById = useMemo(() => {
+    const map = new Map();
+    (data.players || []).forEach((p) => map.set(String(p.id), p));
+    return map;
+  }, [data.players]);
+
+  const formationPlayerIds = useMemo(
+    () => new Set(formationMembers.map((m) => String(m.player_id))),
+    [formationMembers]
+  );
+
+  const fixtureTeams = useMemo(() => {
+    // Final Adult teams are always the four Team Formation teams.
+    // Keep any saved visual/team metadata when available.
+    return formationTeamMeta.map((meta) => {
+      const existing = (data.teams || []).find(
+        (t) =>
+          String(t.id || "").toLowerCase() === meta.id ||
+          String(t.name || "").trim().toLowerCase() === meta.name.toLowerCase()
+      );
+      return {
+        ...(existing || {}),
+        id: meta.id,
+        name: (existing && existing.name) || meta.name,
+        ageGroup: "adult",
+        playerIds: formationMembers
+          .filter((m) => String(m.team_id).toLowerCase() === meta.id)
+          .map((m) => String(m.player_id)),
+      };
+    });
+  }, [formationMembers, data.teams]);
+
+  const fixtureTierMap = useMemo(() => {
+    const next = { ...tiers };
+    formationMembers.forEach((m) => {
+      const id = String(m.player_id || "");
+      const tier = Number(m.tier_number);
+      if (!id || !tier) return;
+      const raw = String(m.tier_group || "").toLowerCase();
+      const category = raw.includes("female") ? "Female" : "Male";
+      next[id] = { ...(next[id] || {}), tier, category };
+    });
+    return next;
+  }, [tiers, formationMembers]);
+
+  const effectiveAvailability = useMemo(
+    () => buildFixtureAvailability(data),
+    [data.players, data.availability, data.availabilityStart, data.availabilityEnd]
+  );
+
+  const fixtureData = useMemo(
+    () => ({ ...data, teams: fixtureTeams, availability: effectiveAvailability }),
+    [data, fixtureTeams, effectiveAvailability]
+  );
+
+  // Build Adult Male/Female tier groups DIRECTLY from accepted Team Formation.
+  // This is the key fix: there is no p.gender === category dependency here.
+  const adultGroups = useMemo(() => {
+    const map = new Map();
+
+    formationMembers.forEach((m) => {
+      const tier = Number(m.tier_number);
+      const pid = String(m.player_id || "");
+      if (!tier || !pid) return;
+
+      const raw = String(m.tier_group || "").toLowerCase();
+      const category = raw.includes("female") ? "Female" : "Male";
+      const key = groupKey(category, tier);
+
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          category,
+          tier,
+          members: [],
+          junior: false,
+          priority: tier <= PRIORITY_TIERS,
+        });
+      }
+
+      const p = playerById.get(pid);
+      // If the player table is still syncing, retain a safe stub so the tier/team
+      // does not disappear. Normally p is present and fullName(p) is shown.
+      const member = p || {
+        id: pid,
+        first: m.player_name || "Player",
+        last: p ? p.last : "",
+        gender: category,
+        ageGroup: "adult",
+        calStatus: "done",
+      };
+      map.get(key).members.push(member);
+    });
+
+    return Array.from(map.values()).sort(
+      (a, b) => a.tier - b.tier || a.category.localeCompare(b.category)
+    );
+  }, [formationMembers, playerById]);
+
+  const juniorGroups = useMemo(
+    () => tierGroupList(data, tiers).filter((g) => g.junior),
+    [data.players, data.teams, data.tierCounts, tiers]
+  );
+
+  const groups = useMemo(
+    () => [...adultGroups, ...juniorGroups],
+    [adultGroups, juniorGroups]
+  );
+
+  // Plan exactly the groups visible in Fixtures, instead of asking tierGroupList()
+  // to rebuild Adult groups from the legacy Teams state.
+  const planFixtureGroups = (thresholdValue) => {
+    const dates = candidateDates(fixtureData);
+    const next = {};
+    groups.forEach((g) => {
+      let best = null;
+      dates.forEach((date, dIdx) => {
+        const look = dateFit(fixtureData, g, date);
+        let score = look.primaryCount * 14 + look.free.length * 6;
+        if (isWeekend(date)) score += g.priority ? 30 : 4;
+        else if (g.priority) score -= 12;
+        score -= dIdx * 0.2;
+        if (!best || score > best.score) best = { date, score, look };
+      });
+
+      if (!best) {
+        next[g.key] = {
+          date: "", slot: "", secondSlot: "", total: g.members.length,
+          available: 0, primary: [], second: [],
+          unplaced: g.members.map((p) => p.id),
+          coverage: 0, meetsThreshold: false,
+        };
+        return;
+      }
+
+      const look = best.look;
+      const coverage = g.members.length ? look.primaryCount / g.members.length : 0;
+      next[g.key] = {
+        date: best.date,
+        slot: look.primarySlot,
+        secondSlot: look.secondSlot,
+        total: g.members.length,
+        available: look.free.length,
+        primary: look.primary,
+        second: look.second,
+        unplaced: look.unplaced,
+        coverage,
+        meetsThreshold: coverage >= thresholdValue,
+        weekend: isWeekend(best.date),
+      };
+    });
+    return next;
+  };
+
+  // Draw Adult fixtures from the accepted formation groups themselves.
+  const buildFixtureRows = (currentPlan, includeCrossTier) => {
+    const out = [];
+
+    // Adult Male/Female: ONLY same-tier pairings, scheduled from common
+    // green date/time overlap from the Availability calendar source.
+    adultGroups.forEach((g) => {
+      const schedule = tierCommonGreenSchedule(fixtureData, g);
+      if (!schedule) return;
+
+      (schedule.pairFixtures || []).forEach((pf) => {
+        out.push({
+          id: uid(),
+          category: g.category,
+          tierA: g.tier,
+          tierB: g.tier,
+          sameTier: true,
+          hostTier: g.tier,
+          teamA: pf.teamA,
+          teamB: pf.teamB,
+          playerA: pf.a.id,
+          playerB: pf.b.id,
+          date: pf.date,
+          slot: pf.slot,
+          needsSlot: false,
+          matchId: null,
+        });
+      });
+
+      // Keep unscheduled combinations visible rather than inventing a date/time.
+      (schedule.unscheduled || []).forEach((pf) => {
+        out.push({
+          id: uid(),
+          category: g.category,
+          tierA: g.tier,
+          tierB: g.tier,
+          sameTier: true,
+          hostTier: g.tier,
+          teamA: pf.teamA,
+          teamB: pf.teamB,
+          playerA: pf.a.id,
+          playerB: pf.b.id,
+          date: "",
+          slot: "",
+          needsSlot: true,
+          matchId: null,
+        });
+      });
+    });
+
+    // Kids retain the existing Kids fixture behaviour.
+    const kidData = { ...data, teams: data.teams || [], availability: effectiveAvailability };
+    const kidBuilt = buildFixtures(kidData, tiers, currentPlan, { crossTier: false })
+      .filter((f) => isKid(f.category));
+    out.push(...kidBuilt);
+
+    return out;
+  };
+
   const plan = data.tierPlan || {};
   const fixtures = data.fixtures || [];
 
-  const teamName = (id) => (data.teams.find((t) => t.id === id) || {}).name || "—";
+  const teamName = (id) => (fixtureTeams.find((t) => t.id === id) || {}).name || "—";
   const sideName = (f, id) => (f.individual ? catLabel(f.category) : teamName(id));
   const playerName = (id) => {
-    const p = data.players.find((x) => x.id === id);
+    const p = data.players.find((x) => String(x.id) === String(id));
     return p ? fullName(p) : "—";
   };
 
   const runPlan = () => {
-    if (!groups.length) {
-      notify("Nobody is calibrated and on a team yet, so there are no tiers to place.");
-      return;
-    }
-    const next = planTiers(data, tiers, { threshold });
+    const next = {};
+
+    groups.forEach((g) => {
+      if (!g.junior) {
+        const schedule = tierCommonGreenSchedule(fixtureData, g);
+        const main = schedule && schedule.main;
+        const primary = main
+          ? g.members.filter((p) => slotsFree(fixtureData, p.id, main.date).includes(main.slot)).map((p) => p.id)
+          : [];
+        next[g.key] = {
+          date: main ? main.date : "",
+          slot: main ? main.slot : "",
+          secondSlot: schedule && schedule.sittings[1] ? schedule.sittings[1].slot : "",
+          total: g.members.length,
+          available: primary.length,
+          primary,
+          second: [],
+          unplaced: schedule ? (schedule.unscheduled || []).flatMap((p) => [p.a.id, p.b.id]) : g.members.map((p) => p.id),
+          coverage: schedule && schedule.totalMatches
+            ? ((schedule.main ? schedule.main.pairCount : 0) / schedule.totalMatches)
+            : 0,
+          meetsThreshold: !!(schedule && schedule.main && schedule.main.pairCount === schedule.totalMatches),
+          weekend: !!(main && isWeekend(main.date)),
+        };
+      } else {
+        const kidPlan = planTiers(
+          { ...data, availability: effectiveAvailability },
+          tiers,
+          { threshold }
+        );
+        if (kidPlan[g.key]) next[g.key] = kidPlan[g.key];
+      }
+    });
+
     update((d) => ({ ...d, tierPlan: next }));
-    const met = groups.filter((g) => next[g.key] && next[g.key].meetsThreshold).length;
-    const left = groups.reduce((n, g) => n + ((next[g.key] || {}).unplaced || []).length, 0);
-    notify(
-      `${groups.length} tiers placed. ${met} cleared ${Math.round(threshold * 100)}% on one slot` +
-        (left ? `, ${left} players still need a time.` : ".")
-    );
+    notify("Tier dates calculated from the same green availability calendar used in Availability.");
   };
 
   const setPlanField = (key, field, value) => {
@@ -5748,7 +6745,7 @@ function FixturesTab({ data, update, tiers, notify }) {
       notify("Calibrate players and put them on teams first.");
       return;
     }
-    const built = buildFixtures(data, tiers, plan, { crossTier });
+    const built = buildFixtureRows(plan, false);
     if (!built.length) {
       notify("No fixtures — you need at least two teams with calibrated players in them.");
       return;
@@ -5882,6 +6879,17 @@ function FixturesTab({ data, update, tiers, notify }) {
     ];
   });
 
+  const displayTeams = catFilter === "Kids"
+    ? (data.teams || []).filter((t) => {
+        if (t.ageGroup === "kids") return true;
+        const ids = (t.playerIds || []).map(String);
+        return ids.some((id) => {
+          const p = playerById.get(id);
+          return p && ageGroupOf(p) === "kids";
+        });
+      })
+    : fixtureTeams;
+
   return (
     <div className="stack">
       <DataBar
@@ -5894,7 +6902,20 @@ function FixturesTab({ data, update, tiers, notify }) {
 
       <section className="card">
         <header className="card-head">
-          <h2>Tier days</h2>
+          <div>
+            <h2>Tier days</h2>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:8}}>
+              <button type="button"
+                className={"btn btn-tiny " + (catFilter==="Male" ? "btn-primary" : "")}
+                onClick={()=>setCatFilter("Male")}>Adult Male</button>
+              <button type="button"
+                className={"btn btn-tiny " + (catFilter==="Female" ? "btn-primary" : "")}
+                onClick={()=>setCatFilter("Female")}>Adult Female</button>
+              <button type="button"
+                className={"btn btn-tiny " + (catFilter==="Kids" ? "btn-primary" : "")}
+                onClick={()=>setCatFilter("Kids")}>Kids</button>
+            </div>
+          </div>
           <div className="head-tools">
             <label className="range">
               <span>Enough is</span>
@@ -5912,17 +6933,21 @@ function FixturesTab({ data, update, tiers, notify }) {
           </div>
         </header>
         <p className="muted plan-note">
-          A tier plays on one date across every team. The date picked is the one where the largest
-          block of that tier is free at the same time — once that block passes your threshold the day
-          is good enough to lock. Whoever the main sitting misses gets a second sitting at the other
-          end of the same day, and anyone still left over is listed so you can chase them. Men's and
-          women's tiers 1 and 2 get first refusal on Friday, Saturday and Sunday.
+          A tier plays on one date across every team. For adult team tiers, TT Pulse now first looks
+          for one date and time where players from all teams can attend together, so the complete
+          round-robin can finish in one sitting. If that is not possible, it shows how many team
+          combinations can play and suggests a separate common date/time for each missing combination.
+          The original main/second-sitting planner remains available as a fallback. Men's and women's
+          tiers 1 and 2 still get first refusal on Friday, Saturday and Sunday.
+          <br/><b>Male and Female recommended dates/times now appear directly in the table even before you click Compare dates.</b>
         </p>
 
-        {groups.length === 0 ? (
+        {groups.filter((g) => g.category === catFilter).length === 0 ? (
           <Empty
-            title="No tiers to place yet"
-            body="Rate players on the Calibration page and put them on teams, then come back."
+            title={catFilter === "Kids" ? "No Kids tiers to place yet" : `No Adult ${catFilter} tiers found`}
+            body={catFilter === "Kids"
+              ? "Rate Kids players on the Calibration page, then come back."
+              : "Fixtures is waiting for the final accepted Adult Team Formation. Open Team Formation and confirm the final teams once; the names and tiers will then appear here automatically."}
           />
         ) : (
           <div className="table-scroll">
@@ -5932,6 +6957,7 @@ function FixturesTab({ data, update, tiers, notify }) {
                   <th>Tier</th>
                   <th>Date</th>
                   <th>Main sitting</th>
+                  <th>Players at best slot</th>
                   <th>Second sitting</th>
                   <th>Still to place</th>
                   <th>Overlap</th>
@@ -5939,12 +6965,30 @@ function FixturesTab({ data, update, tiers, notify }) {
                 </tr>
               </thead>
               <tbody>
-                {groups.map((g) => {
+                {groups
+                  .filter((g) => g.category === catFilter)
+                  .map((g) => {
                   const p = plan[g.key] || {};
                   const pct = Math.round((p.coverage || 0) * 100);
                   const left = (p.unplaced || []).length;
                   const open = openTier === g.key;
-                  const options = open ? dateOptions(data, g) : [];
+                  const options = open ? dateOptions(fixtureData, g) : [];
+                  // Always calculate the best adult round-robin sitting so Male/Female
+                  // recommended dates are visible directly in the fixture table.
+                  const rrOptions = !g.junior ? tierRoundRobinOptions(fixtureData, g, 5) : [];
+                  const rrBest = rrOptions[0] || null;
+                  const displayDate = p.date || (rrBest ? rrBest.date : "");
+                  const displaySlot = p.slot || (rrBest ? rrBest.slot : "");
+                  const makeup = open && rrBest ? tierMakeupSuggestions(fixtureData, g, rrBest) : [];
+                  const rrPresentIds = new Set((rrBest && rrBest.present) || []);
+                  const tierTeamRows = fixtureTeams.map((t) => {
+                    const player = g.members.find((m) => (t.playerIds || []).map(String).includes(String(m.id)));
+                    return {
+                      team: t,
+                      player,
+                      available: !!(player && rrPresentIds.has(player.id)),
+                    };
+                  }).filter((x) => x.player);
                   return (
                     <React.Fragment key={g.key}>
                       <tr>
@@ -5959,21 +7003,24 @@ function FixturesTab({ data, update, tiers, notify }) {
                           <span className="date-cell">
                             <input
                               type="date"
-                              value={p.date || ""}
+                              value={displayDate}
                               onChange={(e) => setPlanField(g.key, "date", e.target.value)}
                             />
-                            {p.date ? (
-                              <span
-                                className={"chip chip-quiet" + (isWeekend(p.date) ? " chip-weekend" : "")}
-                              >
-                                {isWeekend(p.date) ? "Weekend" : "Weekday"}
-                              </span>
+                            {displayDate ? (
+                              <>
+                                <span
+                                  className={"chip chip-quiet" + (isWeekend(displayDate) ? " chip-weekend" : "")}
+                                >
+                                  {isWeekend(displayDate) ? "Weekend" : "Weekday"}
+                                </span>
+                                {!p.date && rrBest ? <span className="chip good-text">Suggested</span> : null}
+                              </>
                             ) : null}
                           </span>
                         </td>
                         <td>
                           <select
-                            value={p.slot || ""}
+                            value={displaySlot}
                             onChange={(e) => setPlanField(g.key, "slot", e.target.value)}
                           >
                             <option value="">Not set</option>
@@ -5983,7 +7030,22 @@ function FixturesTab({ data, update, tiers, notify }) {
                               </option>
                             ))}
                           </select>
-                          <div className="mono tier-size">{(p.primary || []).length} free then</div>
+                          <div className="mono tier-size">
+                            {p.slot ? `${(p.primary || []).length} free then` : rrBest ? `${rrBest.teamsTogether}/${rrBest.totalTeams} teams together` : "No common slot"}
+                          </div>
+                        </td>
+                        <td>
+                          {rrBest ? (
+                            <div style={{ minWidth: 210 }}>
+                              {tierTeamRows.map(({ team, player, available }) => (
+                                <div key={team.id} className={available ? "good-text" : "warn-text"} style={{ marginBottom: 4 }}>
+                                  <b>{team.name || "Team"}</b>: {playerName(player.id)} {available ? "✓" : "✕"}
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="muted">No common slot yet</span>
+                          )}
                         </td>
                         <td>
                           <select
@@ -6000,7 +7062,7 @@ function FixturesTab({ data, update, tiers, notify }) {
                           <div className="mono tier-size">{(p.second || []).length} mopped up</div>
                         </td>
                         <td className={left ? "mono warn-text" : "mono good-text"}>
-                          {p.date ? (left ? `${left} players` : "Everyone placed") : "—"}
+                          {p.date ? (left ? `${left} players` : "Everyone placed") : rrBest ? `${rrBest.possibleMatches}/${rrBest.totalMatches} combinations` : "—"}
                         </td>
                         <td>
                           {p.date ? (
@@ -6014,6 +7076,13 @@ function FixturesTab({ data, update, tiers, notify }) {
                               <b className={"mono" + (p.meetsThreshold ? " good-text" : " warn-text")}>
                                 {pct}%
                               </b>
+                            </div>
+                          ) : rrBest ? (
+                            <div className="cov">
+                              <div className="cov-track">
+                                <span className="cov-fill ok" style={{ width: Math.min(100, (rrBest.teamsTogether / Math.max(1, rrBest.totalTeams)) * 100) + "%" }} />
+                              </div>
+                              <b className="mono good-text">{Math.round((rrBest.teamsTogether / Math.max(1, rrBest.totalTeams)) * 100)}%</b>
                             </div>
                           ) : (
                             <span className="muted">—</span>
@@ -6031,9 +7100,72 @@ function FixturesTab({ data, update, tiers, notify }) {
 
                       {open ? (
                         <tr className="drawer">
-                          <td colSpan={7}>
+                          <td colSpan={8}>
                             <div className="overlap">
                               <div className="overlap-dates">
+                                {!g.junior ? (
+                                  <div className="card" style={{ marginBottom: 14 }}>
+                                    <div className="eyebrow">Round-robin recommendation</div>
+                                    {rrBest ? (
+                                      <>
+                                        <h3 style={{ marginTop: 6 }}>
+                                          {rrBest.teamsTogether === rrBest.totalTeams
+                                            ? `All ${rrBest.totalTeams} teams together`
+                                            : `${rrBest.teamsTogether} of ${rrBest.totalTeams} teams together`}
+                                        </h3>
+                                        <p className="plan-note">
+                                          <b>{shortDate(rrBest.date)}</b> · <span className="mono">{rrBest.slot}</span> — {rrBest.possibleMatches} of {rrBest.totalMatches} round-robin combinations can be completed in this sitting.
+                                        </p>
+                                        <div style={{ margin: "10px 0 12px" }}>
+                                          <b>Players for this recommended sitting:</b>
+                                          <div className="mini-grid" style={{ marginTop: 8 }}>
+                                            {tierTeamRows.map(({ team, player, available }) => (
+                                              <div key={team.id} className={available ? "good-text" : "warn-text"}>
+                                                <b>{team.name || "Team"}</b> — {playerName(player.id)} {available ? "✓ Available" : "✕ Not available"}
+                                              </div>
+                                            ))}
+                                          </div>
+                                        </div>
+                                        {rrBest.possibleMatches === rrBest.totalMatches ? (
+                                          <p className="good-text"><b>Complete tier day:</b> every team combination can play.</p>
+                                        ) : (
+                                          <div>
+                                            <p className="warn-text"><b>{rrBest.totalMatches - rrBest.possibleMatches} combinations still need another sitting.</b></p>
+                                            <table className="mini">
+                                              <thead>
+                                                <tr><th>Missing combination</th><th>Players</th><th>System suggestion</th></tr>
+                                              </thead>
+                                              <tbody>
+                                                {makeup.map((m, idx) => (
+                                                  <tr key={m.teamA + '|' + m.teamB}>
+                                                    <td><b>{m.teamAName}</b> v <b>{m.teamBName}</b></td>
+                                                    <td>{playerName(m.playerA)} v {playerName(m.playerB)}</td>
+                                                    <td>
+                                                      {m.suggestion ? (
+                                                        <span><b>{shortDate(m.suggestion.date)}</b> · <span className="mono">{m.suggestion.slot}</span></span>
+                                                      ) : (
+                                                        <span className="warn-text">No common slot found</span>
+                                                      )}
+                                                    </td>
+                                                  </tr>
+                                                ))}
+                                              </tbody>
+                                            </table>
+                                          </div>
+                                        )}
+                                        <div className="row-actions" style={{ marginTop: 10 }}>
+                                          <button className="btn btn-tiny" onClick={() => {
+                                            setPlanField(g.key, 'date', rrBest.date);
+                                            setPlanField(g.key, 'slot', rrBest.slot);
+                                          }}>Use recommended tier day</button>
+                                        </div>
+                                      </>
+                                    ) : (
+                                      <p className="muted">No common team slot found yet. Collect availability for this tier first.</p>
+                                    )}
+                                  </div>
+                                ) : null}
+
                                 <h3>
                                   Best dates for {catLabel(g.category)} tier {g.tier}
                                 </h3>
@@ -6050,6 +7182,7 @@ function FixturesTab({ data, update, tiers, notify }) {
                                         <th>Busiest slot</th>
                                         <th>On that slot</th>
                                         <th>Free that day</th>
+                                        {!g.junior ? <th>Teams / combinations</th> : null}
                                         <th />
                                       </tr>
                                     </thead>
@@ -6075,6 +7208,10 @@ function FixturesTab({ data, update, tiers, notify }) {
                                               {o.primaryCount} of {g.members.length} · {oPct}%
                                             </td>
                                             <td className="mono">{o.free.length}</td>
+                                            {!g.junior ? (() => {
+                                              const rr = tierRoundRobinOptions(fixtureData, g, 100).find((x) => x.date === o.date && x.slot === o.primarySlot);
+                                              return <td className="mono">{rr ? `${rr.teamsTogether}/${rr.totalTeams} teams · ${rr.possibleMatches}/${rr.totalMatches} matches` : '—'}</td>;
+                                            })() : null}
                                             <td className="row-actions">
                                               <button
                                                 className="btn btn-tiny"
@@ -6287,10 +7424,132 @@ function FixturesTab({ data, update, tiers, notify }) {
 
       <section className="card">
         <header className="card-head">
-          <h2>Tier day plan</h2>
-          <span className="muted">Export this table on its own</span>
+          <div>
+            <h2>Tier day plan</h2>
+            <div className="muted small" style={{marginTop:4}}>
+              Uses the exact same green slots as the Availability calendar. For each tier, TT Pulse first finds one date/time covering the maximum same-tier team combinations, then uses the fewest extra sittings needed for any remaining combinations.
+            </div>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:8}}>
+              <button type="button"
+                className={"btn btn-tiny " + (catFilter==="Male" ? "btn-primary" : "")}
+                onClick={()=>setCatFilter("Male")}>Adult Male</button>
+              <button type="button"
+                className={"btn btn-tiny " + (catFilter==="Female" ? "btn-primary" : "")}
+                onClick={()=>setCatFilter("Female")}>Adult Female</button>
+              <button type="button"
+                className={"btn btn-tiny " + (catFilter==="Kids" ? "btn-primary" : "")}
+                onClick={()=>setCatFilter("Kids")}>Kids</button>
+            </div>
+          </div>
+          <span className="muted">
+            {formationMembers.length
+              ? `Final Adult Team Formation loaded · ${formationMembers.length} assignments`
+              : formationStatus === "not-formed"
+                ? "Adult teams have not been finally formed yet"
+                : formationStatus === "error"
+                  ? "Could not read final Adult Team Formation"
+                  : "Loading final Adult Team Formation…"}
+          </span>
         </header>
-        <DataBar name="tier-day-plan" columns={planColumns} rows={planRows} notify={notify} />
+
+        <div className="table-scroll">
+          <table className="fixtures">
+            <thead>
+              <tr>
+                <th>Tier</th>
+                {displayTeams.map((t) => (
+                  <th key={t.id}>{t.name || "Team"}</th>
+                ))}
+                <th>Common green date</th>
+                <th>Common green time</th>
+                <th>Teams green together</th>
+                <th>Same-tier matches</th>
+              </tr>
+            </thead>
+            <tbody>
+              {groups
+                .filter((g) => catFilter === "all" || g.category === catFilter)
+                .map((g) => {
+                  const saved = plan[g.key] || {};
+                  const exactSchedule = !g.junior ? tierCommonGreenSchedule(fixtureData, g) : null;
+                  const rr = exactSchedule && exactSchedule.main ? {
+                    date: exactSchedule.main.date,
+                    slot: exactSchedule.main.slot,
+                    present: exactSchedule.main
+                      ? g.members
+                          .filter((p) => slotsFree(fixtureData, p.id, exactSchedule.main.date).includes(exactSchedule.main.slot))
+                          .map((p) => String(p.id))
+                      : [],
+                    teamsTogether: exactSchedule.main ? exactSchedule.main.teamCount : 0,
+                    totalTeams: exactSchedule.totalTeams,
+                    possibleMatches: exactSchedule.main ? exactSchedule.main.pairCount : 0,
+                    totalMatches: exactSchedule.totalMatches,
+                  } : null;
+                  const recDate = rr ? rr.date : (g.junior ? saved.date : "");
+                  const recSlot = rr ? rr.slot : (g.junior ? saved.slot : "");
+                  return (
+                    <tr key={"visible-plan-" + g.key}>
+                      <td>
+                        <span className={"chip tier-" + Math.min(g.tier, 5)}>
+                          Tier {g.tier}
+                          <em>{catLabel(g.category)}</em>
+                        </span>
+                      </td>
+                      {displayTeams.map((t) => {
+                        const pl = g.members.find((m) => (t.playerIds || []).map(String).includes(String(m.id)));
+                        const available = !!(rr && pl && (rr.present || []).map(String).includes(String(pl.id)));
+                        return (
+                          <td key={t.id}>
+                            {pl ? (
+                              <div className="side-cell">
+                                <b>{playerName(pl.id)}</b>
+                                <span className={available ? "good-text" : "muted"}>
+                                  {rr ? (available ? "Available ✓" : "Not in best slot") : "Tier player"}
+                                </span>
+                              </div>
+                            ) : (
+                              <span className="muted">No player</span>
+                            )}
+                          </td>
+                        );
+                      })}
+                      <td><b>{recDate ? shortDate(recDate) : "—"}</b></td>
+                      <td><span className="mono">{recSlot || "—"}</span></td>
+                      <td>
+                        {rr ? (
+                          <b className={rr.teamsTogether === rr.totalTeams ? "good-text" : "warn-text"}>
+                            {rr.teamsTogether}/{rr.totalTeams}
+                          </b>
+                        ) : "—"}
+                      </td>
+                      <td>
+                        {rr ? (
+                          <span>{rr.possibleMatches}/{rr.totalMatches}</span>
+                        ) : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+            </tbody>
+          </table>
+        </div>
+
+        {groups.filter((g) => catFilter === "all" || g.category === catFilter).length === 0 ? (
+          <p className="muted plan-note">
+            {catFilter === "Male" || catFilter === "Female"
+              ? "No final Adult Team Formation rows were found for this category. Form/accept the Adult teams first, then Fixtures will display every tier automatically."
+              : "No tier players found for this category."}
+          </p>
+        ) : null}
+
+        <div style={{ marginTop: 12 }}>
+          <DataBar
+            name="tier-day-plan"
+            columns={planColumns}
+            rows={planRows.filter((_, i) => catFilter === "all" || groups[i].category === catFilter)}
+            notify={notify}
+          />
+        </div>
       </section>
     </div>
   );
@@ -6358,6 +7617,32 @@ function LiveBoard({ m, data, compact }) {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function PublicWildCardBanner({ m, data }) {
+  if (!m) return null;
+  const active = activeSetIndex(m);
+  if (active < 0) return null;
+  const cards = wildCardsForSet(m, active);
+  if (!cards.length) return null;
+  const teamName = (side) => {
+    const tid = side === "a" ? m.teamA : m.teamB;
+    return (data.teams.find((t) => String(t.id) === String(tid)) || {}).name || "Team";
+  };
+  return (
+    <div className="public-wc-flash">
+      <span className="public-wc-ticket">🎟️ WILD CARD</span>
+      {cards.map((w, i) => (
+        <strong key={i}>
+          {teamName(w.side)} called {w.card.toUpperCase()}
+          {w.card === "wc1" && w.detail ? ` · ${w.detail}` : ""}
+          {w.card === "wc2" ? " · Race to 7" : ""}
+          {w.card === "wc3" ? " · Caller starts +5" : ""}
+        </strong>
+      ))}
+      <span>Set {active + 1} · ACTIVE</span>
     </div>
   );
 }
@@ -6503,6 +7788,7 @@ function DashboardTab({ data, role, notify }) {
           <div className="public-live-card">
             <div className="public-live-title"><span className="live-pulse" /> LIVE NOW</div>
             <LiveBoard m={liveNow[0]} data={data} />
+            <PublicWildCardBanner m={liveNow[0]} data={data} />
             {liveNow.length > 1 ? <div className="muted small">+ {liveNow.length - 1} more match{liveNow.length > 2 ? "es" : ""} live</div> : null}
           </div>
         ) : (
@@ -6643,7 +7929,7 @@ function DashboardTab({ data, role, notify }) {
       <section className="card">
         <header className="card-head">
           <h2>Standings on the day</h2>
-          <span className="muted">5 a set · 25 a match</span>
+          <span className="muted">5 per set · 25 match win · +20 successful Wild Card set</span>
         </header>
         {table.length === 0 ? (
           <Empty title="No results yet on this day" body="The day's table builds itself as matches finish." />
@@ -6652,12 +7938,14 @@ function DashboardTab({ data, role, notify }) {
             <table className="standings">
               <thead>
                 <tr>
-                  <th>#</th>
-                  <th>Team</th>
-                  <th>P</th>
-                  <th>Sets W–L</th>
-                  <th>Today</th>
-                  <th>Overall</th>
+                  <th>#</th><th>Team</th><th>P</th><th>W–L</th><th>Sets W–L</th>
+                  <th>Set Scores</th><th>Set Pts</th><th>Match Pts</th><th><span className="wc-head">Wild Cards
+      <span className="wc-head-deck" aria-label="3 Wild Cards">
+        <span className="wc-playing-card">★</span>
+        <span className="wc-playing-card">★</span>
+        <span className="wc-playing-card">★</span>
+      </span>
+    </span></th><th title="20 points for each successful Wild Card">Bonus</th><th>Total</th>
                 </tr>
               </thead>
               <tbody>
@@ -6668,11 +7956,25 @@ function DashboardTab({ data, role, notify }) {
                       <td className="mono rank">{i + 1}</td>
                       <td className="strong">{t.name}</td>
                       <td className="mono">{t.played}</td>
+                      <td className="mono">{t.matchWins}–{t.matchLosses}</td>
                       <td className="mono">
-                        {t.setsWon}–{t.setsLost}
+                        <span className="set-record">
+                          <span className={t.setsWon > t.setsLost ? "set-record-winner" : ""}>{t.setsWon}</span>
+                          <span className="set-record-dash">–</span>
+                          <span className={t.setsLost > t.setsWon ? "set-record-winner" : ""}>{t.setsLost}</span>
+                        </span>
                       </td>
+                      <td>{latestTeamSetScores(t.id)}</td>
+                      <td className="mono">{t.setPoints}</td>
+                      <td className="mono">{t.matchPoints}</td>
+                      <td>
+                        <div className="wc-visual-cards" title={`${3 - t.wcLeft} used · ${t.wcLeft} left · ${t.wcWins} won · ${t.wcLosses} lost`}>
+                          {Array.from({length: t.wcLeft}).map((_,i) => <span className="wc-playing-card" key={i}>★</span>)}
+                        </div>
+                        <div className="muted" style={{fontSize:11, marginTop:4}}>{3 - t.wcLeft} used · {t.wcLeft} left</div>
+                      </td>
+                      <td className="mono">{t.wcBonus}</td>
                       <td className="mono total">{t.points}</td>
-                      <td className="mono">{all.points}</td>
                     </tr>
                   );
                 })}
@@ -8046,7 +9348,7 @@ function WildCardScoringTab({ data, setData, role }) {
       </select>
       {d.wc && <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginTop:8}}>
         <select value={d.set} onChange={e=>setD({...d,set:Number(e.target.value)})}><option value={1}>Set 1</option><option value={2}>Set 2</option><option value={3}>Set 3</option></select>
-        {d.wc==="wc1" ? <select value={d.detail} onChange={e=>setD({...d,detail:e.target.value})}><option>Forehand</option><option>Backhand</option></select> : <div className="muted">{d.wc==="wc2"?"Race to 7":d.wc==="wc3"?"Opponent starts +5 and serves throughout":""}</div>}
+        {d.wc==="wc1" ? <select value={d.detail} onChange={e=>setD({...d,detail:e.target.value})}><option>Forehand</option><option>Backhand</option></select> : <div className="muted">{d.wc==="wc2"?"Race to 7":d.wc==="wc3"?"Caller starts +5":""}</div>}
       </div>}
     </div>
   };
@@ -8077,7 +9379,7 @@ function WildCardScoringTab({ data, setData, role }) {
       {!(store.history||[]).length ? <div className="muted">No completed demo match yet.</div> :
         <div style={{display:"grid",gap:10}}>{(store.history||[]).slice().reverse().map(h=>{
           const wins=setWins(h), winSide=wins.a>wins.b?"A":"B";
-          const wcBonus=(side,d)=>!d?0:(winner(h,h.sets[d.set-1],d.set-1)===side?10:0);
+          const wcBonus=(side,d)=>!d?0:(winner(h,h.sets[d.set-1],d.set-1)===side?20:0);
           const ba=wcBonus("A",h.declA), bb=wcBonus("B",h.declB);
           const setPtsA=wins.a*5,setPtsB=wins.b*5,matchPtsA=wins.a>=2?25:0,matchPtsB=wins.b>=2?25:0;
           const pa=adultPlayers.find(x=>x.id===h.playerA),pb=adultPlayers.find(x=>x.id===h.playerB);
@@ -8102,7 +9404,7 @@ function WildCardScoringTab({ data, setData, role }) {
       <table><thead><tr><th>Team</th><th>WC chits</th><th>Bonus / adjustment</th></tr></thead><tbody>
       {TEAM_META.map(t=>{const oid=t.id===teamA?teamB:(t.id===teamB?teamA:TEAM_META.find(x=>x.id!==t.id).id),u=getUsage(store,t.id,oid),adj=adjustment(t.id,oid);return <tr key={t.id}><td><b>{t.name}</b><div className="muted">vs {tm(oid).name}</div></td><td>{WC.map(w=><span key={w.id} title={w.name+" — "+wcLabel(u,w)} style={{display:"inline-block",marginRight:5,border:`2px solid ${t.color}`,borderRadius:999,padding:"4px 7px",fontWeight:800,background:u[w.id]&&!u[w.id].penalty?t.color:"#fff",color:u[w.id]&&!u[w.id].penalty?"#fff":"#222"}}>{w.short}</span>)}</td><td><b>{adj>0?"+":""}{adj}</b> <button className="btn" disabled={!!store.closed[pkey(t.id,oid)]} onClick={()=>closeSeries(t.id,oid)}>{store.closed[pkey(t.id,oid)]?"Closed":"Close series"}</button></td></tr>})}
       </tbody></table>
-      <div className="panel" style={{marginTop:12}}><b>WC1</b> — Forehand / Backhand challenge &nbsp; · &nbsp; <b>WC2</b> — Race to 7 &nbsp; · &nbsp; <b>WC3</b> — Handicap: challenged player starts +5 and serves throughout.<br/><span className="muted">Used + won = +10. Used + lost = 0. Unused when the opponent series closes = −10 per card.</span></div>
+      <div className="panel" style={{marginTop:12}}><b>WC1</b> — Forehand / Backhand challenge &nbsp; · &nbsp; <b>WC2</b> — Race to 7 &nbsp; · &nbsp; <b>WC3</b> — Handicap: caller starts +5.<br/><span className="muted">Legacy test component (not shown in navigation). Current live scoring awards +20 when the called Wild Card set is won.</span></div>
     </div>
   </div>;
 }
@@ -8257,7 +9559,7 @@ setData(fresh);
     });
   };
 
-  const tierSize = data.tierByTeams === false ? 0 : (data.teams || []).length;
+  const tierSize = data.tierByTeams === false ? 0 : 4; // SAFE FIX: 4 players per tier
   const tiers = useMemo(
     () => computeTiers(data.players, data.tierCounts, tierSize),
     [data.players, data.tierCounts, tierSize]
@@ -8354,7 +9656,6 @@ setData(fresh);
           {active === "tiers" && <TiersTab {...tabProps} />}
           {active === "teams" && <TeamsTab {...tabProps} />}
           {active === "teamformation" && <TeamFormationTab {...tabProps} role={role} />}
-        {active === "wildcards" && <WildCardScoringTab {...tabProps} role={role} />}
           {active === "fixtures" && <FixturesTab {...tabProps} />}
           {active === "scoring" && <ScoringTab {...tabProps} />}
           {active === "standings" && <StandingsTab {...tabProps} />}
@@ -8997,6 +10298,78 @@ function Styles() {
   .board-stack{gap:10px}
 }
 
+
+/* ===== Integrated Live Wild Card + Standings ===== */
+
+.wc-head{display:inline-flex;align-items:center;gap:6px}
+.wc-head-cards{letter-spacing:1px;font-size:13px}
+.wc-visual-wrap{display:flex;align-items:center;gap:7px;justify-content:center;min-width:135px}
+.wc-visual-cards{display:flex;align-items:center;gap:4px;justify-content:center;min-height:28px}
+.wc-ticket-card{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:31px;height:22px;border-radius:5px;
+  background:linear-gradient(180deg,#f6c445,#d99f18);
+  color:#201700;border:1px solid rgba(255,255,255,.45);
+  box-shadow:0 2px 7px rgba(0,0,0,.22);
+  font-size:9px;font-weight:1000;letter-spacing:.3px;
+  transform:rotate(-2deg);
+}
+.wc-ticket-card:nth-child(2){transform:rotate(2deg)}
+.wc-ticket-card:nth-child(3){transform:rotate(-1deg)}
+.wc-used-link{
+  border:0;background:transparent;color:#f6c445;text-decoration:underline;
+  cursor:pointer;font-size:11px;font-weight:900;padding:2px 3px;white-space:nowrap
+}
+.wc-unused-note,.wc-none{font-size:11px;opacity:.55;white-space:nowrap}
+
+
+.wc-mini-group{display:flex;gap:5px;align-items:center;justify-content:center;flex-wrap:nowrap}
+.wc-mini{
+  min-width:34px;padding:4px 6px;border-radius:7px;border:1px solid rgba(255,255,255,.2);
+  font-size:11px;font-weight:900;line-height:1.2;text-align:center;background:rgba(255,255,255,.06);color:inherit;
+}
+button.wc-mini{cursor:pointer}
+.wc-mini.left{opacity:.46}
+.wc-mini.used{background:rgba(246,196,69,.17);border-color:rgba(246,196,69,.62)}
+.wc-mini.won{background:rgba(55,190,115,.18);border-color:rgba(55,190,115,.68)}
+.wc-mini.lost{background:rgba(220,70,70,.15);border-color:rgba(220,70,70,.55)}
+.wc-mini.active{background:rgba(246,196,69,.24);border-color:#f6c445}
+.wc-status-compact{min-width:116px;line-height:1.25}
+.wc-sub{display:block;font-size:11px;opacity:.7;margin-top:2px}
+
+
+.standings th,.standings td{white-space:nowrap}
+.standings td:nth-last-child(1){font-weight:900}
+.standings .wc-won{font-weight:800}
+
+.standings-formula{
+  margin-top:7px;padding:8px 10px;border-radius:10px;
+  background:rgba(246,196,69,.10);border:1px solid rgba(246,196,69,.35);
+  color:#ffe9a2;font-size:13px;
+}
+
+.wc-live-control{
+  margin:12px 0;padding:12px;border:1px solid rgba(255,255,255,.16);
+  border-radius:16px;background:rgba(7,18,39,.78);
+}
+.wc-live-title{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.wc-live-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.wc-live-side{display:grid;gap:7px;padding:10px;border-radius:12px;background:rgba(255,255,255,.055)}
+.wc-active-chip{display:inline-flex;width:max-content;padding:6px 10px;border-radius:999px;background:#f6c445;color:#211600;font-weight:900}
+.public-wc-flash{
+  margin-top:10px;padding:12px 14px;border:2px solid #f6c445;border-radius:14px;
+  background:rgba(57,39,0,.92);display:flex;align-items:center;justify-content:center;
+  gap:10px;flex-wrap:wrap;text-align:center;animation:ttWcFlash 1.05s ease both;
+}
+.public-wc-ticket{padding:5px 8px;border-radius:999px;background:#f6c445;color:#211600;font-weight:900}
+@keyframes ttWcFlash{
+  0%{opacity:0;transform:scale(.82)}
+  45%{opacity:1;transform:scale(1.04)}
+  100%{opacity:1;transform:scale(1)}
+}
+@media (prefers-reduced-motion:reduce){.public-wc-flash{animation:none}}
+@media(max-width:700px){.wc-live-grid{grid-template-columns:1fr}}
+
 `}</style>
   );
 }
@@ -9005,3 +10378,88 @@ ReactDOM.createRoot(document.getElementById("root")).render(<App />);
 </script>
 </body>
 </html>
+<style>
+/* Final compact playing-card Wild Card treatment */
+.wc-head{display:inline-flex!important;align-items:center;gap:8px}
+.wc-head-deck,.wc-visual-cards{
+  display:inline-flex!important;
+  align-items:center;
+  justify-content:center;
+  min-width:38px!important;
+  min-height:36px!important;
+  padding-left:8px;
+}
+.wc-playing-card{
+  width:21px!important;
+  height:31px!important;
+  min-width:21px!important;
+  display:inline-flex!important;
+  align-items:center;
+  justify-content:center;
+  margin-left:-9px!important;
+  border-radius:4px!important;
+  border:1.5px solid rgba(255,255,255,.88)!important;
+  background:linear-gradient(145deg,#fffdf6,#e8e4d8)!important;
+  color:#17233a!important;
+  box-shadow:0 2px 6px rgba(0,0,0,.32)!important;
+  font-size:9px!important;
+  font-weight:1000!important;
+  transform:none!important;
+}
+.wc-playing-card:first-child{margin-left:0!important}
+.wc-playing-card:nth-child(1){transform:rotate(-4deg)!important}
+.wc-playing-card:nth-child(2){transform:rotate(0deg)!important}
+.wc-playing-card:nth-child(3){transform:rotate(4deg)!important}
+.wc-visual-wrap{
+  min-width:70px!important;
+  display:flex!important;
+  justify-content:center!important;
+  align-items:center!important;
+  gap:3px!important;
+}
+.wc-used-link{
+  padding:0!important;
+  min-width:18px;
+  font-size:13px!important;
+  text-decoration:none!important;
+}
+</style>
+
+<style>
+.set-record{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:3px;
+  min-width:48px;
+  font-weight:800;
+  font-size:14px;
+}
+.set-record-winner{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-width:22px;
+  height:22px;
+  padding:0 5px;
+  border-radius:6px;
+  background:rgba(55,190,115,.22);
+  border:1px solid rgba(55,190,115,.62);
+  font-weight:1000;
+}
+.set-record-dash{opacity:.58;font-weight:700}
+</style>
+
+<style>
+.set-score-list{display:flex;gap:4px;align-items:center;justify-content:center;white-space:nowrap}
+.set-score-pill{
+  display:inline-flex;align-items:center;justify-content:center;
+  min-width:42px;padding:3px 6px;border-radius:7px;font-size:11px;font-weight:900;
+  border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.05)
+}
+.set-score-pill.won{
+  background:rgba(55,190,115,.20);
+  border-color:rgba(55,190,115,.62);
+}
+.set-score-pill.lost{opacity:.66}
+</style>
