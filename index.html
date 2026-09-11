@@ -7665,6 +7665,40 @@ function DashboardTab({ data, role, notify }) {
   };
   const teamOf = (id) => (data.teams.find((t) => t.id === id) || {}).name || "—";
 
+  // Dashboard needs its own latest-set renderer. The previous build only
+  // defined this helper inside StandingsTab, so entering Super Admin and
+  // rendering dashboard standings could throw: latestTeamSetScores is not defined.
+  const latestTeamSetScores = (teamId) => {
+    const matches = (data.matches || [])
+      .filter((m) => {
+        const r = matchResult(m);
+        return r.complete && (m.teamA === teamId || m.teamB === teamId);
+      })
+      .slice()
+      .sort((a,b) => String(b.completedAt || b.date || b.id || "").localeCompare(String(a.completedAt || a.date || a.id || "")));
+
+    const m = matches[0];
+    if (!m) return <span className="muted">—</span>;
+
+    const side = m.teamA === teamId ? "a" : "b";
+    return (
+      <div className="set-score-list" title="Latest completed match set scores">
+        {(m.sets || []).map((s, idx) => {
+          if (!setDoneForMatch(m, idx)) return null;
+          const a = Number(s.a || 0), b = Number(s.b || 0);
+          const mine = side === "a" ? a : b;
+          const opp = side === "a" ? b : a;
+          const won = mine > opp;
+          return (
+            <span className={`set-score-pill ${won ? "won" : "lost"}`} key={idx}>
+              {mine}–{opp}
+            </span>
+          );
+        })}
+      </div>
+    );
+  };
+
   const liveNow = data.matches.filter((m) => m.status === "live" && !matchResult(m).complete);
   const finishedToday = data.matches.filter((m) => m.date === day && matchResult(m).complete);
   const upcoming = (data.fixtures || [])
