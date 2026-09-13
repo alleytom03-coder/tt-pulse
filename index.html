@@ -1,3 +1,4 @@
+<!-- TT PULSE DEUCE FIX 2026-09-13: normal sets require 2-point margin at/after 10-10; WC2 remains first-to-7 -->
 <!-- TT Pulse WC FOOLPROOF BONUS FIX 2026-09-11: WC result derived from finished set score -->
 <!-- TT PULSE SAFE TIER ROUND-ROBIN FIXTURES 2026-09-10 -->
 <!-- TT PULSE UPDATED WILDCARD + FIXED 4-PLAYER TIERS 2026-09-11 -->
@@ -765,15 +766,26 @@ function wildCardsForSet(m, setIndex) {
 function setTargetForMatch(m, setIndex) {
   return wildCardsForSet(m, setIndex).some((w) => w.card === "wc2") ? 7 : POINTS_TO_WIN_SET;
 }
-/* A normal set ends at 11. WC2 makes that set a race to 7. */
+/* Normal set: first to 11, but at deuce a player must lead by 2.
+   WC2 remains a true race to 7: first player to 7 wins immediately. */
 function setDoneForMatch(m, setIndex) {
   const s = (m.sets || [])[setIndex] || { a: 0, b: 0 };
+  const a = num(s.a);
+  const b = num(s.b);
   const target = setTargetForMatch(m, setIndex);
-  return num(s.a) >= target || num(s.b) >= target;
+
+  // WC2: Race to 7 — no deuce extension.
+  if (target === 7) return a >= 7 || b >= 7;
+
+  // Normal TT set: minimum 11 points and a 2-point winning margin.
+  return (a >= POINTS_TO_WIN_SET || b >= POINTS_TO_WIN_SET) && Math.abs(a - b) >= 2;
 }
-/* Kept for older report/import code that has no match context. */
+/* Kept for older report/import code that has no match context.
+   Apply the same normal-set deuce rule here too. */
 function setDone(s) {
-  return num(s.a) >= POINTS_TO_WIN_SET || num(s.b) >= POINTS_TO_WIN_SET;
+  const a = num(s.a);
+  const b = num(s.b);
+  return (a >= POINTS_TO_WIN_SET || b >= POINTS_TO_WIN_SET) && Math.abs(a - b) >= 2;
 }
 function setWinnerForMatch(m, setIndex) {
   if (!setDoneForMatch(m, setIndex)) return null;
@@ -4626,7 +4638,7 @@ function ScoringTab({ data, update, notify }) {
         const sets = m.sets.map((s, idx) => {
           if (idx !== i) return s;
           const current = num(s[side]);
-          const nextValue = delta > 0 ? Math.min(target, current + delta) : Math.max(0, current + delta);
+          const nextValue = delta > 0 ? (target === 7 ? Math.min(7, current + delta) : current + delta) : Math.max(0, current + delta);
           return { ...s, [side]: String(nextValue) };
         });
         let after = { ...m, sets };
@@ -4655,7 +4667,8 @@ function ScoringTab({ data, update, notify }) {
         if (setDoneForMatch(m, i)) return m; // completed set is frozen
 
         const target = setTargetForMatch(m, i);
-        const v = value === "" ? 0 : Math.max(0, Math.min(target, Number(value) || 0));
+        const rawValue = value === "" ? 0 : Math.max(0, Number(value) || 0);
+        const v = target === 7 ? Math.min(7, rawValue) : rawValue;
         const sets = m.sets.map((s, idx) =>
           idx === i ? { ...s, [side]: String(v) } : s
         );
