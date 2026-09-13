@@ -4393,6 +4393,7 @@ function TeamsTab({ data, update, tiers, notify }) {
    ============================================================ */
 
 function ScoringTab({ data, update, notify }) {
+  const [matchGroup, setMatchGroup] = useState("adult");
   const [teamA, setTeamA] = useState("");
   const [teamB, setTeamB] = useState("");
   const [playerA, setPlayerA] = useState("");
@@ -4404,6 +4405,8 @@ function ScoringTab({ data, update, notify }) {
   const [wcPick, setWcPick] = useState({});
 
   const teamById = (id) => data.teams.find((t) => t.id === id);
+  const isKidsTeam = (t) => !!t && (String(t.ageGroup || "").toLowerCase() === "kids" || String(t.id || "").startsWith("kids-"));
+  const scoringTeams = (data.teams || []).filter((t) => matchGroup === "kids" ? isKidsTeam(t) : !isKidsTeam(t));
   const roster = (id) => {
     const t = teamById(id);
     if (!t) return [];
@@ -4535,6 +4538,7 @@ function ScoringTab({ data, update, notify }) {
       ],
       status: "live",
       scorer: scorer || (dutyFor(ymd(new Date()))[0] || {}).name || "",
+      category: matchGroup === "kids" ? "Kids" : undefined,
       wildCards: { a: [], b: [] },
     };
     update((d) => ({ ...d, matches: [m, ...d.matches] }));
@@ -4905,7 +4909,25 @@ function ScoringTab({ data, update, notify }) {
           <h2>Set up a match</h2>
           <span className="muted">All 3 sets are played · +5 per set won · +25 match win · +20 if the called Wild Card set is won</span>
         </header>
+        {matchGroup === "kids" && scoringTeams.length === 0 ? (
+          <div className="card" style={{marginBottom:12,border:"2px solid #f59e0b"}}>
+            <b>No final Kids Mixed teams found yet.</b>
+            <div className="muted" style={{marginTop:4}}>Accept Option 1 or Option 2 in Team Formation first. The four Kids teams will then appear here.</div>
+          </div>
+        ) : null}
         <div className="grid-form four">
+          <Field label="Match group">
+            <select
+              value={matchGroup}
+              onChange={(e) => {
+                setMatchGroup(e.target.value);
+                setTeamA(""); setTeamB(""); setPlayerA(""); setPlayerB("");
+              }}
+            >
+              <option value="adult">Adults</option>
+              <option value="kids">Kids Mixed</option>
+            </select>
+          </Field>
           <Field label="Team A">
             <select
               value={teamA}
@@ -4915,7 +4937,7 @@ function ScoringTab({ data, update, notify }) {
               }}
             >
               <option value="">Select team</option>
-              {data.teams.map((t) => (
+              {scoringTeams.map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name}
                 </option>
@@ -4945,7 +4967,7 @@ function ScoringTab({ data, update, notify }) {
               }}
             >
               <option value="">Select team</option>
-              {data.teams
+              {scoringTeams
                 .filter((t) => t.id !== teamA)
                 .map((t) => (
                   <option key={t.id} value={t.id}>
@@ -5861,7 +5883,281 @@ function PerformanceTab({ data, tiers, notify }) {
 }
 
 
-function TeamFormationTab({ data, update, tiers, role, notify }) {
+
+function KidsTeamFormationPane({ data, update, tiers, role, notify }) {
+  const META = [
+    { id:"kids-red", shortId:"red", name:"Red", color:"#dc2626" },
+    { id:"kids-blue", shortId:"blue", name:"Blue", color:"#2563eb" },
+    { id:"kids-black", shortId:"black", name:"Black", color:"#111827" },
+    { id:"kids-orange", shortId:"orange", name:"Orange", color:"#f97316" }
+  ];
+  const KEY = "tt_pulse_team_formation_kids_v1";
+  const fresh = () => ({ option1:null, option2:null, confirmChoice:null, accepted:null, tierSignature:"" });
+
+  const [draft,setDraft] = React.useState(() => {
+    try {
+      const x = JSON.parse(localStorage.getItem(KEY) || "null");
+      return x && typeof x === "object" ? {...fresh(),...x} : fresh();
+    } catch(e) { return fresh(); }
+  });
+
+  React.useEffect(() => {
+    try { localStorage.setItem(KEY, JSON.stringify(draft)); } catch(e) {}
+  }, [draft]);
+
+  const shuffle = (arr) => {
+    const a=arr.slice();
+    for(let i=a.length-1;i>0;i--){
+      const j=Math.floor(Math.random()*(i+1));
+      [a[i],a[j]]=[a[j],a[i]];
+    }
+    return a;
+  };
+  const blankTeams = () => ({"kids-red":[],"kids-blue":[],"kids-black":[],"kids-orange":[]});
+  const kids=(data.players||[]).filter(p=>playerTierGroup(p)==="Kids" && isCalibrated(p) && tiers[p.id]);
+  const tierSignature=kids.slice().sort((a,b)=>String(a.id).localeCompare(String(b.id)))
+    .map(p=>`${p.id}:${tiers[p.id]?.tier||0}:${calScore(p).toFixed(3)}`).join("|");
+  const orderFor=(bucketIndex)=>META.map((_,i)=>META[(bucketIndex+i)%4]);
+
+  function makeBuckets(){
+    const grouped={};
+    kids.forEach(p=>{
+      const tier=Number(tiers[p.id]?.tier)||0;
+      if(!tier) return;
+      (grouped[tier]||(grouped[tier]=[])).push(p);
+    });
+    return Object.keys(grouped).map(Number).sort((a,b)=>b-a).map(tier=>{
+      const list=grouped[tier].slice().sort((a,b)=>calScore(b)-calScore(a)||fullName(a).localeCompare(fullName(b)));
+      const cards=list.map(p=>({id:String(p.id),name:fullName(p),group:"Kids Mixed",tier}));
+      while(cards.length<4) cards.push({id:null,name:"EMPTY",group:"Kids Mixed",tier});
+      return {key:"Kids-"+tier,label:"Kids Mixed — Tier "+tier,group:"Kids Mixed",tier,cards:cards.slice(0,4)};
+    });
+  }
+
+  function expectedIds(proposal){
+    return (proposal?.buckets||[]).flatMap(b=>b.cards.filter(c=>c.id).map(c=>String(c.id)));
+  }
+  function assignedIds(proposal){
+    return META.flatMap(t=>(proposal?.teams?.[t.id]||[]).filter(c=>c.id).map(c=>String(c.id)));
+  }
+  function validateProposal(proposal){
+    if(!proposal || proposal.status!=="ready") return {ok:false,msg:"Proposal is not complete."};
+    const expected=expectedIds(proposal), assigned=assignedIds(proposal), unique=new Set(assigned);
+    if(expected.length!==assigned.length) return {ok:false,msg:"Player count mismatch. Please restart this option."};
+    if(unique.size!==assigned.length) return {ok:false,msg:"Duplicate player detected. Please restart this option."};
+    const expSet=new Set(expected);
+    if(assigned.some(id=>!expSet.has(id)) || expected.some(id=>!unique.has(id)))
+      return {ok:false,msg:"A player is missing or incorrectly assigned. Please restart this option."};
+    return {ok:true,msg:"OK"};
+  }
+
+  function startOption1(){
+    const buckets=makeBuckets();
+    if(!buckets.length){ notify("No calibrated Kids Mixed players are available."); return; }
+    setDraft(d=>({...d,confirmChoice:null,accepted:null,tierSignature,option1:{
+      status:"running",buckets,bucketIndex:0,shuffles:0,pickIndex:0,
+      cards:buckets[0].cards.map(c=>({...c,revealed:false,takenBy:null})),teams:blankTeams()
+    }}));
+  }
+  function shuffleOption1(){
+    setDraft(d=>{
+      const o=d.option1;
+      if(!o || o.status!=="running" || o.shuffles>=4 || o.pickIndex>0) return d;
+      return {...d,option1:{...o,cards:shuffle(o.cards),shuffles:o.shuffles+1}};
+    });
+  }
+  function pickCard(cardIndex){
+    setDraft(d=>{
+      const o=d.option1;
+      if(!o || o.status!=="running" || o.shuffles!==4 || o.pickIndex>=4) return d;
+      const card=o.cards[cardIndex];
+      if(!card || card.takenBy) return d;
+      const team=orderFor(o.bucketIndex)[o.pickIndex];
+      const cards=o.cards.map((c,i)=>i===cardIndex?{...c,revealed:true,takenBy:team.id}:c);
+      const teams={...o.teams};
+      if(card.id) teams[team.id]=[...(teams[team.id]||[]),card];
+      return {...d,option1:{...o,cards,teams,pickIndex:o.pickIndex+1}};
+    });
+  }
+  function nextBucket(){
+    setDraft(d=>{
+      const o=d.option1;
+      if(!o || o.pickIndex!==4) return d;
+      if(o.bucketIndex+1>=o.buckets.length) return {...d,option1:{...o,status:"ready"}};
+      const next=o.bucketIndex+1;
+      return {...d,option1:{...o,bucketIndex:next,shuffles:0,pickIndex:0,
+        cards:o.buckets[next].cards.map(c=>({...c,revealed:false,takenBy:null}))}};
+    });
+  }
+
+  function startOption2(){
+    const buckets=makeBuckets();
+    if(!buckets.length){ notify("No calibrated Kids Mixed players are available."); return; }
+    setDraft(d=>({...d,confirmChoice:null,accepted:null,tierSignature,option2:{status:"running",buckets,shuffles:0,teams:blankTeams()}}));
+  }
+  function shuffleOption2(){
+    setDraft(d=>{
+      const o=d.option2;
+      if(!o || o.status!=="running" || o.shuffles>=3) return d;
+      const nextCount=o.shuffles+1;
+      if(nextCount<3) return {...d,option2:{...o,shuffles:nextCount}};
+      const teams=blankTeams();
+      o.buckets.forEach((bucket,bucketIndex)=>{
+        const cards=shuffle(bucket.cards);
+        const order=orderFor(bucketIndex);
+        cards.forEach((card,i)=>{ if(card.id) teams[order[i].id].push(card); });
+      });
+      return {...d,option2:{...o,shuffles:3,teams,status:"ready"}};
+    });
+  }
+
+  function requestAccept(which){
+    const proposal=which===1?draft.option1:draft.option2;
+    const v=validateProposal(proposal);
+    if(!v.ok){ notify(v.msg); return; }
+    setDraft(d=>({...d,confirmChoice:which}));
+  }
+  function cancelAccept(){ setDraft(d=>({...d,confirmChoice:null})); }
+  function confirmAccept(){
+    const which=draft.confirmChoice;
+    const proposal=which===1?draft.option1:draft.option2;
+    const v=validateProposal(proposal);
+    if(!v.ok){ notify(v.msg); return; }
+    const accepted={option:which,acceptedAt:new Date().toISOString(),teams:proposal.teams,tierSignature};
+    setDraft(d=>({...d,confirmChoice:null,accepted}));
+    update(d=>{
+      const keep=(d.teams||[]).filter(t=>String(t.ageGroup||"").toLowerCase()!=="kids" && !String(t.id||"").startsWith("kids-"));
+      const kidTeams=META.map(meta=>({
+        id:meta.id,name:meta.name,ageGroup:"kids",
+        playerIds:(proposal.teams?.[meta.id]||[]).filter(c=>c.id).map(c=>String(c.id))
+      }));
+      return {...d,teams:[...keep,...kidTeams]};
+    });
+    notify("Option "+which+" accepted. Final Kids Mixed teams formed.");
+  }
+  function restartOption(which){ if(which===1) startOption1(); else startOption2(); }
+  function resetKidsFormation(){
+    if(role!=="super"){ notify("Only Super Admin can reset Kids Team Formation."); return; }
+    setDraft(fresh());
+    try{ localStorage.removeItem(KEY); }catch(e){}
+    update(d=>({...d,teams:(d.teams||[]).filter(t=>String(t.ageGroup||"").toLowerCase()!=="kids" && !String(t.id||"").startsWith("kids-"))}));
+    notify("Kids Team Formation reset. Players, calibrations and tiers were not changed.");
+  }
+
+  function TeamColumns({teams}){
+    return <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:10,marginTop:12}}>
+      {META.map(team=><div key={team.id} className="card" style={{padding:0,overflow:"hidden"}}>
+        <div style={{background:team.color,color:"#fff",padding:"10px 12px",fontWeight:900}}>{team.name}</div>
+        <div style={{padding:12}}>
+          {(teams?.[team.id]||[]).length
+            ? (teams[team.id]||[]).map((c,i)=><div key={(c.id||"empty")+"-"+i} style={{padding:"6px 0",borderBottom:"1px solid #e5e7eb"}}>
+                <b>{c.name}</b><div className="muted" style={{fontSize:11}}>Kids Mixed · Tier {c.tier}</div>
+              </div>)
+            : <span className="muted">No players yet</span>}
+        </div>
+      </div>)}
+    </div>;
+  }
+
+  const stale = !!draft.tierSignature && draft.tierSignature!==tierSignature;
+  if(draft.accepted && !stale){
+    return <section className="panel">
+      <div className="panelHead"><div><h2>Final Kids Mixed Teams Formed</h2>
+        <p className="muted">Accepted Option {draft.accepted.option}. Boys and girls are mixed using the existing Kids tier buckets.</p></div></div>
+      <TeamColumns teams={draft.accepted.teams}/>
+      <div className="card" style={{marginTop:16}}><b>Final Kids choice locked</b>
+        <p className="muted" style={{margin:"6px 0 10px"}}>The accepted Kids teams are also stored in TT Pulse team data.</p>
+        {role==="super" && <button type="button" className="danger" onClick={resetKidsFormation}>Reset Kids Team Formation</button>}
+      </div>
+    </section>;
+  }
+
+  const o1=stale?null:draft.option1;
+  const o2=stale?null:draft.option2;
+  const currentBucket=o1?.buckets?.[o1.bucketIndex];
+  const pickOrder=o1?orderFor(o1.bucketIndex):[];
+
+  return <section className="panel">
+    <div className="panelHead"><div><h2>Kids Mixed Team Formation</h2>
+      <p className="muted">Uses the same 4-player tier-bucket logic as Adults. Boys and girls stay mixed.</p></div></div>
+    {stale && <div className="card" style={{marginBottom:14,border:"2px solid #f59e0b"}}>
+      <b>Calibration / tier change detected.</b>
+      <p className="muted" style={{margin:"6px 0 0"}}>Start Option 1 or Option 2 again to use the latest Kids Mixed tiers.</p>
+    </div>}
+    <div className="grid3">
+      <div className="stat"><span>Calibrated Kids</span><b>{kids.length}</b></div>
+      <div className="stat"><span>Teams</span><b>4</b></div>
+      <div className="stat"><span>Tier bucket</span><b>4</b></div>
+    </div>
+
+    {draft.confirmChoice && !stale && <div className="card" style={{marginTop:16,border:"2px solid #111827"}}>
+      <h3>Confirm Final Kids Team Formation</h3>
+      <p>Accept <b>Option {draft.confirmChoice}</b> as the final Kids Mixed team proposal?</p>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        <button type="button" onClick={confirmAccept}>Confirm Option {draft.confirmChoice} & Form Kids Teams</button>
+        <button type="button" className="secondary" onClick={cancelAccept}>Cancel</button>
+      </div>
+    </div>}
+
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(330px,1fr))",gap:16,marginTop:16}}>
+      <div className="card"><h3>Option 1 — Captain Lucky Draw</h3>
+        <p className="muted">Same Adult logic: 4 genuine shuffles, then one face-down card per team for each Kids tier.</p>
+        {!o1 && <button type="button" onClick={startOption1}>Start Option 1</button>}
+        {o1?.status==="running" && <>
+          <div style={{marginTop:12,fontWeight:900}}>{currentBucket?.label}</div>
+          <div className="muted" style={{fontSize:12}}>Pick order: {pickOrder.map(t=>t.name).join(" → ")}</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginTop:10}}>
+            {(o1.cards||[]).map((card,i)=><button type="button" key={i} disabled={o1.shuffles!==4 || !!card.takenBy} onClick={()=>pickCard(i)}
+              style={{minHeight:96,fontWeight:900,background:card.revealed?"#fff":"#111827",color:card.revealed?"#111827":"#fff"}}>
+              {card.revealed?card.name:"♠"}</button>)}
+          </div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:10}}>
+            {o1.shuffles<4 && <button type="button" onClick={shuffleOption1}>Shuffle {o1.shuffles+1} of 4</button>}
+            {o1.shuffles===4 && o1.pickIndex<4 && <span className="badge">Current team: {pickOrder[o1.pickIndex]?.name}</span>}
+            {o1.pickIndex===4 && <button type="button" onClick={nextBucket}>{o1.bucketIndex+1===o1.buckets.length?"Finish Option 1":"Next Tier"}</button>}
+          </div>
+          <TeamColumns teams={o1.teams}/>
+        </>}
+        {o1?.status==="ready" && <><div className="badge" style={{marginTop:10}}>Option 1 proposal ready ✓</div><TeamColumns teams={o1.teams}/>
+          <button type="button" onClick={()=>requestAccept(1)} style={{marginTop:12}}>Accept Option 1 & Form Kids Teams</button></>}
+        {o1 && <button type="button" className="secondary" onClick={()=>restartOption(1)} style={{marginTop:10}}>Restart Option 1</button>}
+      </div>
+
+      <div className="card"><h3>Option 2 — Automatic System Draw</h3>
+        <p className="muted">All Kids Mixed tier buckets reshuffle 3 times. Full teams reveal after Shuffle 3.</p>
+        {!o2 && <button type="button" onClick={startOption2}>Start Option 2</button>}
+        {o2?.status==="running" && <>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginTop:12}}>
+            {[1,2,3].map(n=><div key={n} className="stat"><span>Shuffle {n}</span><b>{n<=o2.shuffles?"✓":"—"}</b></div>)}
+          </div>
+          <button type="button" onClick={shuffleOption2} style={{marginTop:10}}>{o2.shuffles<2?"Run Shuffle "+(o2.shuffles+1)+" of 3":"Run Shuffle 3 of 3 & Generate Teams"}</button>
+        </>}
+        {o2?.status==="ready" && <><div className="badge" style={{marginTop:10}}>Option 2 proposal ready ✓</div><TeamColumns teams={o2.teams}/>
+          <button type="button" onClick={()=>requestAccept(2)} style={{marginTop:12}}>Accept Option 2 & Form Kids Teams</button></>}
+        {o2 && <button type="button" className="secondary" onClick={()=>restartOption(2)} style={{marginTop:10}}>Restart Option 2</button>}
+      </div>
+    </div>
+  </section>;
+}
+
+function TeamFormationTab(props) {
+  const [ageMode,setAgeMode]=React.useState("adult");
+  return <div className="stack">
+    <section className="card" style={{padding:"12px 16px"}}>
+      <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+        <b>Team Formation Group</b>
+        <select value={ageMode} onChange={e=>setAgeMode(e.target.value)} style={{minWidth:180}}>
+          <option value="adult">Adults</option>
+          <option value="kids">Kids</option>
+        </select>
+        <span className="muted">{ageMode==="kids" ? "Kids Mixed (boys + girls)" : "Adult Male + Adult Female"}</span>
+      </div>
+    </section>
+    {ageMode==="kids" ? <KidsTeamFormationPane {...props}/> : <AdultTeamFormationPane {...props}/>} 
+  </div>;
+}
+
+function AdultTeamFormationPane({ data, update, tiers, role, notify }) {
   const META = [
     { id:"red", name:"Red", color:"#dc2626" },
     { id:"blue", name:"Blue", color:"#2563eb" },
