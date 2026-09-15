@@ -1,3 +1,4 @@
+<!-- TT PULSE RECOVERED TEAMS + ALL-CHANGE AUTOSAVE SAFETY 2026-09-15 -->
 <!-- TT PULSE DEUCE FIX 2026-09-13: normal sets require 2-point margin at/after 10-10; WC2 remains first-to-7 -->
 <!-- TT Pulse WC FOOLPROOF BONUS FIX 2026-09-11: WC result derived from finished set score -->
 <!-- TT PULSE SAFE TIER ROUND-ROBIN FIXTURES 2026-09-10 -->
@@ -591,6 +592,11 @@ const EMPTY = {
   refDuty: {}, // "YYYY-MM-DD" -> [{ id, name }] whoever keeps score that day
   codes: null, // set on first run
 };
+
+/* RECOVERY 2026-09-15: preserved team assignments from verified backup.
+   Used only when the current tournament has no teams, so future edits are never overwritten. */
+const RECOVERED_TEAMS_20260915 = [{"id":"y4d2463q","name":"Red","ageGroup":"kids","playerIds":["nvx9w7w0","lcpz2h8d","17kmhp7l","yayylawe","b4xuiolj","axt31wlc","tci4nw0c","brob7tb9","sexy280n","xee12uv1","ouccn4y2","kf62bpla","a686wrv2","hk2hg1tt"]},{"id":"gms8fwpl","name":"Blue","ageGroup":"kids","playerIds":["9dan0ijv","4sjrbgyl","v8gbutdl","dxjs66d4","94t7bs5t","qrt09yax","9s1lpfmo","6zv3xp7v","bettv3ib","olpf7z5u","9hp6hb8p","rzrjgy6t","86jg5i7h","2vvz2ewi"]},{"id":"nvmdbhys","name":"Orange","ageGroup":"kids","playerIds":["2kb6lb7x","d7txxz3v","5df47aga","wraprarf","pa61a58z","evwfgvct","d46yaok4","gp6necix","jr94w2t0","vrc47tzu","gn8ms0is","mowi01fk","r28m3agp","y7ozqoie"]},{"id":"ag5fbwgx","name":"Black","ageGroup":"kids","playerIds":["897rp5tq","1abd6wqg","bmykhqum","71505pc6","5tpd5652","5iy3sepu","lrgpoh4t","fpq7qasg","xlxnab6h","14scybdt","sxe4ad6h","gv9g5jq9","xv8u0xxj","yvxspfd6"]},{"id":"jvpbp9eh","name":"Adults-Red","ageGroup":"adult","playerIds":["34acfvtt","m234hfvk","2blcjq9d","1ry9kb4i","m0jbzf9u","85gt84m3","9vt7xrca","616u0arw","zphw8wzr","lj7u9j4r","8tpo10wr","l26o29w5","uycml2si","7lc5k8a8","rpws2ni9","68oonbhw","1syu5qrm","jcy6lx6c"]},{"id":"rj5bf5ab","name":"Adults-Blue","ageGroup":"adult","playerIds":["72bnhykz","f1awb3u8","2yup3vob","zu7vxh2z","bmpnlpm4","gsm9r85q","o2jprq4l","xya4klq3","9fjlvs54","xfscp9h1","yfxka1o3","mzmmdbjw","5g3vkx90","lia5f06s","ghe596x8","7kvr6eov","ftkwx16b","1s0e415e"]},{"id":"0t71roel","name":"Adult-Orange","ageGroup":"adult","playerIds":["mw2lqr0l","gu9e4a0d","xgbe9txy","bk48vfa2","94u3c3fl","1ekiqpiu","cr37xrjt","i95qbk95","0iaem84w","zpiahpn9","u8ph2f0e","5m6m6upr","z7oha2pd","p3rpuoiy","ff40y5qo","7coyu7c8","u583c04x","g88y7f4d"]},{"id":"3iysoo0c","name":"Adult-Black","ageGroup":"adult","playerIds":["euvqjeqb","z77xxe97","a68kcbhi","qzncmjaj","papqr9mg","hq3y4ymy","gfjajsdn","tth0ytww","6f38w7zh","ligyue0b","ckk97z0b","hgmwpqkn","nuci3emg","obmqxo1w","3bn934ii","j5tufvho","xztgf3e2","eg0zc29e"]}];
+
 
 /* ---------- small utilities ---------- */
 
@@ -6809,9 +6815,25 @@ function FixturesTab({ data, update, tiers, notify }) {
     });
   }, [formationMembers, data.teams]);
 
+  /* If the newer Team Formation cloud tables are empty, use the recovered/current
+     adult data.teams assignments instead of showing no formed teams. */
+  const effectiveFormationMembers = useMemo(() => {
+    if (formationMembers.length) return formationMembers;
+    const rows = [];
+    (data.teams || []).filter(t => String(t.ageGroup || "").toLowerCase() === "adult").forEach(t => {
+      const tid = String(t.name || t.id || "").toLowerCase().replace(/^adults?-/, "");
+      (t.playerIds || []).forEach(pid => {
+        const tr = tiers[String(pid)] || {};
+        const p = (data.players || []).find(x => String(x.id) === String(pid));
+        rows.push({ team_id: tid, player_id: String(pid), player_name: p ? `${p.first || ""} ${p.last || ""}`.trim() : "", tier_group: tr.category || (p && p.gender) || "", tier_number: Number(tr.tier) || null });
+      });
+    });
+    return rows;
+  }, [formationMembers, data.teams, data.players, tiers]);
+
   const fixtureTierMap = useMemo(() => {
     const next = { ...tiers };
-    formationMembers.forEach((m) => {
+    effectiveFormationMembers.forEach((m) => {
       const id = String(m.player_id || "");
       const tier = Number(m.tier_number);
       if (!id || !tier) return;
@@ -6820,7 +6842,7 @@ function FixturesTab({ data, update, tiers, notify }) {
       next[id] = { ...(next[id] || {}), tier, category };
     });
     return next;
-  }, [tiers, formationMembers]);
+  }, [tiers, effectiveFormationMembers]);
 
   const effectiveAvailability = useMemo(
     () => buildFixtureAvailability(data),
@@ -6837,7 +6859,7 @@ function FixturesTab({ data, update, tiers, notify }) {
   const adultGroups = useMemo(() => {
     const map = new Map();
 
-    formationMembers.forEach((m) => {
+    effectiveFormationMembers.forEach((m) => {
       const tier = Number(m.tier_number);
       const pid = String(m.player_id || "");
       if (!tier || !pid) return;
@@ -6874,7 +6896,7 @@ function FixturesTab({ data, update, tiers, notify }) {
     return Array.from(map.values()).sort(
       (a, b) => a.tier - b.tier || a.category.localeCompare(b.category)
     );
-  }, [formationMembers, playerById]);
+  }, [effectiveFormationMembers, playerById]);
 
   const juniorGroups = useMemo(
     () => tierGroupList(data, tiers).filter((g) => g.junior),
@@ -7751,8 +7773,8 @@ function FixturesTab({ data, update, tiers, notify }) {
             </div>
           </div>
           <span className="muted">
-            {formationMembers.length
-              ? `Final Adult Team Formation loaded · ${formationMembers.length} assignments`
+            {effectiveFormationMembers.length
+              ? `Final Adult Team Formation loaded · ${effectiveFormationMembers.length} assignments`
               : formationStatus === "not-formed"
                 ? "Adult teams have not been finally formed yet"
                 : formationStatus === "error"
@@ -9259,7 +9281,7 @@ function AccessTab({ data, update, notify }) {
           `Type RESTORE to continue.`
         );
 
-        if (answer !== "RESTORE") {
+        if (String(answer || "").trim().toUpperCase() !== "RESTORE") {
           notify("Restore cancelled.");
           e.target.value = "";
           return;
@@ -9885,6 +9907,22 @@ setData(fresh);
       document.removeEventListener("visibilitychange", pull);
     };
   }, [ready]);
+
+  /* One-time safe team recovery. If a deployed/cloud state has no teams, restore the
+     verified team assignments and immediately persist them. Existing/non-empty teams are untouched. */
+  useEffect(() => {
+    if (!ready || !data || (data.teams || []).length) return;
+    if (!RECOVERED_TEAMS_20260915.length) return;
+    setData((prev) => {
+      if ((prev.teams || []).length) return prev;
+      const next = { ...prev, teams: RECOVERED_TEAMS_20260915.map(t => ({...t, playerIds:[...(t.playerIds||[])]})) };
+      const json = JSON.stringify(next);
+      stamp.current = json;
+      try { localStorage.setItem(STORE_KEY, json); } catch(e) {}
+      Promise.resolve(window.storage.set(STORE_KEY, json)).catch(e => console.error("Recovered teams autosave failed", e));
+      return next;
+    });
+  }, [ready, data && data.teams && data.teams.length]);
 
   const update = (fn) => {
     setData((prev) => {
