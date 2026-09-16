@@ -4452,9 +4452,19 @@ function ScoringTab({ data, update, notify }) {
 
   /* Anything drawn for today that nobody has called to a table yet. */
   const todayStr = ymd(new Date());
+  // Every accepted fixture is visible in Live Scoring immediately.
+  // Today's fixtures stay first, followed by future accepted fixtures.
   const todaysFixtures = (data.fixtures || [])
-    .filter((f) => f.date === todayStr && !f.matchId)
-    .sort((a, b) => SLOTS.indexOf(a.slot) - SLOTS.indexOf(b.slot) || a.hostTier - b.hostTier);
+    .filter((f) => !f.matchId)
+    .sort((a, b) => {
+      const aToday = fDateKey(a) === todayStr ? 0 : 1;
+      const bToday = fDateKey(b) === todayStr ? 0 : 1;
+      if (aToday !== bToday) return aToday - bToday;
+      return String(fDateKey(a)).localeCompare(String(fDateKey(b))) ||
+        SLOTS.indexOf(a.slot) - SLOTS.indexOf(b.slot) ||
+        (a.hostTier || 0) - (b.hostTier || 0);
+    });
+  function fDateKey(f){ return String(f.date || ""); }
 
   const startFromFixture = (f) => {
     const m = {
@@ -4885,8 +4895,8 @@ function ScoringTab({ data, update, notify }) {
       {todaysFixtures.length ? (
         <section className="card">
           <header className="card-head">
-            <h2>Scheduled for today</h2>
-            <span className="muted">{todaysFixtures.length} waiting to be called</span>
+            <h2>Accepted Fixtures — Ready for Live Scoring</h2>
+            <span className="muted">{todaysFixtures.length} accepted · waiting to be started</span>
           </header>
           <ul className="op-list">
             {todaysFixtures.slice(0, 20).map((f) => (
@@ -4900,9 +4910,11 @@ function ScoringTab({ data, update, notify }) {
                   <i>v</i>
                   <b>{nameOf(f.playerB)}</b>
                 </span>
-                <span className="muted op-teams">{f.slot || "time not set"}</span>
-                <button className="btn btn-tiny" onClick={() => startFromFixture(f)}>
-                  Call to the table
+                <span className="muted op-teams">
+                  {prettyDate(f.date)} · {f.slot || "time not set"} · ✓ Accepted
+                </span>
+                <button className="btn btn-tiny btn-primary" onClick={() => startFromFixture(f)}>
+                  Start Live Scoring
                 </button>
               </li>
             ))}
@@ -6689,6 +6701,8 @@ function FixturesTab({ data, update, tiers, notify }) {
   const [kindFilter, setKindFilter] = useState("all");
   const [threshold, setThreshold] = useState(DEFAULT_COVERAGE);
   const [openTier, setOpenTier] = useState(null);
+  const fixtureImportRef = useRef(null);
+  const [fixtureImportBusy, setFixtureImportBusy] = useState(false);
 
   // FINAL FIXTURES SOURCE
   // Adult fixtures are built directly from the accepted Team Formation rows.
@@ -7022,6 +7036,299 @@ function FixturesTab({ data, update, tiers, notify }) {
     return p ? fullName(p) : "—";
   };
 
+  /* ------------------------------------------------------------
+     Imported tier sitting workflow
+     The organiser's latest fixture sheet is authoritative. A row can be:
+       Team Red | Team Blue | Team Black | Team Orange | Date | Time Slot
+     We validate all four names against the 128 Players and the formed teams.
+     Nothing reaches Dashboard until Accept is clicked.
+     ------------------------------------------------------------ */
+  const importedProposals = data.fixtureProposals || [];
+  const cleanFixtureName = (v) => String(v || "").trim().toLowerCase().replace(/\s+/g, " ");
+  const fullNameKey = (p) => cleanFixtureName(fullName(p));
+
+  const findPlayerByImportedName = (name) => {
+    const raw = cleanFixtureName(name);
+    if (!raw) return null;
+    const stripTitle = (s) => cleanFixtureName(s).replace(/^(dr|dr\.|mr|mr\.|mrs|mrs\.|ms|ms\.)\s+/i,"");
+    const key = stripTitle(raw);
+    const pool = data.players || [];
+
+    // 1) Exact match, ignoring common titles such as Dr.
+    let hits = pool.filter((p) => stripTitle(fullNameKey(p)) === key);
+    if (hits.length === 1) return hits[0];
+
+    // 2) Safe typo match: same surname + first name differing by only one edit.
+    const parts = key.split(" ").filter(Boolean);
+    if (parts.length >= 2) {
+      const first=parts[0], last=parts[parts.length-1];
+      const editDistance=(a,b)=>{
+        const m=a.length,n=b.length,dp=Array.from({length:m+1},()=>Array(n+1).fill(0));
+        for(let i=0;i<=m;i++) dp[i][0]=i;
+        for(let j=0;j<=n;j++) dp[0][j]=j;
+        for(let i=1;i<=m;i++) for(let j=1;j<=n;j++)
+          dp[i][j]=Math.min(dp[i-1][j]+1,dp[i][j-1]+1,dp[i-1][j-1]+(a[i-1]===b[j-1]?0:1));
+        return dp[m][n];
+      };
+      hits=pool.filter((p)=>{
+        const pp=stripTitle(fullNameKey(p)).split(" ").filter(Boolean);
+        if(pp.length<2) return false;
+        return pp[pp.length-1]===last && editDistance(pp[0],first)<=1;
+      });
+      if(hits.length===1) return hits[0];
+    }
+    return null;
+  };
+
+  const parseFixtureDate = (value) => {
+    let v = String(value || "").trim();
+    if (!v) return "";
+    // Already ISO.
+    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+    // dd/mm/yyyy or dd-mm-yyyy
+    let m = v.match(/\b(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})\b/);
+    if (m) {
+      let y = Number(m[3]); if (y < 100) y += 2000;
+      return `${y}-${String(Number(m[2])).padStart(2,"0")}-${String(Number(m[1])).padStart(2,"0")}`;
+    }
+    // "Sat, 19 Sep", "19 Sept", optionally with year.
+    m = v.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+(\d{4}))?/i);
+    if (m) {
+      const months={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+      const mon=months[m[2].slice(0,3).toLowerCase()];
+      const year=Number(m[3] || new Date().getFullYear());
+      return `${year}-${String(mon).padStart(2,"0")}-${String(Number(m[1])).padStart(2,"0")}`;
+    }
+    const d = new Date(v);
+    return Number.isNaN(d.getTime()) ? "" : ymd(d);
+  };
+
+  const normFixtureSlot = (value) => String(value || "")
+    .replace(/[–—]/g,"-")
+    .replace(/\s+/g," ")
+    .trim()
+    .replace(/\b(am|pm)\b/ig, (x)=>x.toUpperCase());
+
+  const availabilityBucketFor = (slot) => {
+    const x = normFixtureSlot(slot).toLowerCase();
+    const nums = x.match(/\d{1,2}/g) || [];
+    if (!nums.length) return "";
+    let h = Number(nums[0]);
+    if (x.includes("pm") && h < 12) h += 12;
+    if (x.includes("am") && h === 12) h = 0;
+    if (h >= 6 && h < 8) return "6:00 – 8:00 AM";
+    if (h >= 8 && h < 10 && x.includes("am")) return "8:00 – 10:00 AM";
+    if (h >= 10 && h < 12 && x.includes("am")) return "10:00 AM – 12:00 PM";
+    if (h >= 16 && h < 18) return "4:00 – 6:00 PM";
+    if (h >= 18 && h < 20) return "6:00 – 8:00 PM";
+    if (h >= 20 && h < 22) return "8:00 – 10:00 PM";
+    return "";
+  };
+
+  const validateFixtureProposal = (proposal) => {
+    const colors = ["red","blue","black","orange"];
+    const players = colors.map((c) => {
+      const direct = findPlayerByImportedName(proposal[c]);
+      if (direct) return direct;
+
+      // Manual-review fallback: resolve the imported name against the expected colour team.
+      // This allows harmless differences such as "Dhruti Pandit" / "Dr Shruti Pandit",
+      // omitted middle names, punctuation and similar spelling variations.
+      const wanted = cleanFixtureName(proposal[c]).replace(/^(dr|dr\\.|mr|mr\\.|mrs|mrs\\.|ms|ms\\.)\\s+/i,"");
+      const parts = wanted.split(" ").filter(Boolean);
+      const first = parts[0] || "", last = parts[parts.length-1] || "";
+      const rosterIds = new Set(
+        effectiveFormationMembers
+          .filter(m => String(m.team_id||"").toLowerCase().replace(/^adults?-/,"") === c)
+          .map(m => String(m.player_id))
+      );
+      const candidates = (data.players||[]).filter(p => rosterIds.has(String(p.id)));
+      const ed=(a,b)=>{
+        a=String(a||""); b=String(b||"");
+        const d=Array.from({length:a.length+1},()=>Array(b.length+1).fill(0));
+        for(let i=0;i<=a.length;i++) d[i][0]=i;
+        for(let j=0;j<=b.length;j++) d[0][j]=j;
+        for(let i=1;i<=a.length;i++) for(let j=1;j<=b.length;j++)
+          d[i][j]=Math.min(d[i-1][j]+1,d[i][j-1]+1,d[i-1][j-1]+(a[i-1]===b[j-1]?0:1));
+        return d[a.length][b.length];
+      };
+      const ranked=candidates.map(p=>{
+        const nm=cleanFixtureName(fullName(p)).replace(/^(dr|dr\\.|mr|mr\\.|mrs|mrs\\.|ms|ms\\.)\\s+/i,"");
+        const pp=nm.split(" ").filter(Boolean), pf=pp[0]||"", pl=pp[pp.length-1]||"";
+        let score=0;
+        if(last && pl===last) score+=8;
+        if(first && pf===first) score+=6;
+        if(first && ed(first,pf)<=1) score+=4;
+        if(last && ed(last,pl)<=1) score+=3;
+        if(nm.includes(wanted) || wanted.includes(nm)) score+=3;
+        return {p,score};
+      }).sort((a,b)=>b.score-a.score);
+      return ranked.length && ranked[0].score>=7 && (!ranked[1] || ranked[0].score>ranked[1].score) ? ranked[0].p : null;
+    });
+    const missing = colors.filter((c,i) => !players[i]).map((c) => proposal[c] || c);
+    const teamMismatch = [];
+    players.forEach((p,i) => {
+      if (!p) return;
+      const c=colors[i];
+      const formed = effectiveFormationMembers.find((m) => String(m.player_id) === String(p.id));
+      if (formed && String(formed.team_id || "").toLowerCase().replace(/^adults?-/,'') !== c) {
+        teamMismatch.push(`${fullName(p)} is ${formed.team_id}, not ${c}`);
+      }
+    });
+    const tierRows = players.filter(Boolean).map((p) => fixtureTierMap[String(p.id)] || {});
+    const tiersFound = Array.from(new Set(tierRows.map((t)=>Number(t.tier)).filter(Boolean)));
+    const catsFound = Array.from(new Set(tierRows.map((t)=>t.category).filter(Boolean)));
+    const date = parseFixtureDate(proposal.date);
+    const slot = normFixtureSlot(proposal.slot);
+    const valid = !missing.length && !teamMismatch.length && tiersFound.length === 1 && catsFound.length === 1 && !!date && !!slot;
+    let available = null;
+    let availabilityDetails = [];
+    const bucket = availabilityBucketFor(slot);
+    if (valid && bucket) {
+      availabilityDetails = players.map((p) => {
+        const free = slotsFree(fixtureData, p.id, date).includes(bucket);
+        return { id:p.id, name:fullName(p), free };
+      });
+      available = availabilityDetails.filter(x => x.free).length;
+    }
+    const unavailableNames = availabilityDetails.filter(x => !x.free).map(x => x.name);
+    const tierMismatch = players.length === 4 && tiersFound.length > 1;
+    // Only tier mismatch is a strong warning. Name/availability differences are informational.
+    return { valid: !tierMismatch, tierMismatch, players, missing, teamMismatch, tier: tiersFound[0] || null, category: catsFound[0] || "", date, slot, available, bucket, availabilityDetails, unavailableNames,
+      issue: missing.length ? `Name variation / player link: ${missing.join(", ")}` :
+        teamMismatch.length ? teamMismatch.join("; ") :
+        tiersFound.length !== 1 ? "The four players are not in one tier" :
+        catsFound.length !== 1 ? "The four players are not in one category" :
+        !date ? "Date could not be read" : !slot ? "Time slot is missing" : "" };
+  };
+
+  const fixtureHeaderKey = (v) => normKey(v).replace(/colour/g,"color");
+  const readFixtureSheet = (rows) => {
+    const clean=(rows||[]).filter(r=>Array.isArray(r)&&r.some(c=>String(c??"").trim()));
+    if (!clean.length) return [];
+
+    // Search every early row for the fixture header instead of assuming row 1.
+    // This supports title rows such as "TT Fixtures" above the real headings.
+    let hi=-1, found=null;
+    for(let r=0;r<Math.min(clean.length,20);r++){
+      const heads=clean[r].map(fixtureHeaderKey);
+      const idx=(alts)=>heads.findIndex(h=>alts.includes(h));
+      const cand={
+        ir:idx(["teamred","redteam","red","redplayer","playerred"]),
+        ib:idx(["teamblue","blueteam","blue","blueplayer","playerblue"]),
+        ik:idx(["teamblack","blackteam","black","blackplayer","playerblack"]),
+        io:idx(["teamorange","orangeteam","orange","orangeplayer","playerorange"]),
+        id:idx(["date","matchdate","scheduleddate","fixturedate","scheduledon","matchday"]),
+        is:idx(["timeslot","slot","time","matchtime","scheduledtime","timing","timeperiod"])
+      };
+      if(!Object.values(cand).some(i=>i<0)){ hi=r; found=cand; break; }
+    }
+
+    // Fallback for the organiser's standard six-column sheet:
+    // RED | BLUE | BLACK | ORANGE | DATE | TIME
+    if(hi<0){
+      for(let r=0;r<Math.min(clean.length,20);r++){
+        const joined=clean[r].map(x=>String(x||"").trim().toLowerCase());
+        if(joined.length>=6 &&
+           /red/.test(joined[0]) && /blue/.test(joined[1]) &&
+           /black/.test(joined[2]) && /orange/.test(joined[3]) &&
+           /date|day/.test(joined[4]) && /time|slot|timing/.test(joined[5])){
+          hi=r; found={ir:0,ib:1,ik:2,io:3,id:4,is:5}; break;
+        }
+      }
+    }
+    if(hi<0 || !found) return [];
+
+    const {ir,ib,ik,io,id,is}=found;
+    return clean.slice(hi+1).map((r,n)=>({
+      id: `import-${Date.now()}-${n}-${Math.random().toString(36).slice(2,7)}`,
+      red:String(r[ir]??"").trim(), blue:String(r[ib]??"").trim(), black:String(r[ik]??"").trim(), orange:String(r[io]??"").trim(),
+      date:String(r[id]??"").trim(), slot:String(r[is]??"").trim(), source:"Imported", importedAt:new Date().toISOString()
+    })).filter(x=>x.red||x.blue||x.black||x.orange);
+  };
+
+  const importFixtureFile = (e) => {
+    const file=e.target.files && e.target.files[0]; if(!file) return;
+    setFixtureImportBusy(true);
+    const excel=/\.(xlsx|xlsm|xls)$/i.test(file.name);
+    const reader=new FileReader();
+    reader.onload=()=>{
+      try{
+        let rows=[];
+        if(excel){
+          if(!window.XLSX) throw new Error("Excel support did not load");
+          const wb=window.XLSX.read(new Uint8Array(reader.result),{type:"array"});
+          let proposalsFromWorkbook=[];
+          for(const sheetName of wb.SheetNames){
+            const sheetRows=window.XLSX.utils.sheet_to_json(wb.Sheets[sheetName],{header:1,blankrows:false,defval:"",raw:false});
+            const p=readFixtureSheet(sheetRows);
+            if(p.length){ proposalsFromWorkbook=p; rows=sheetRows; break; }
+          }
+          if(proposalsFromWorkbook.length) rows.__fixtureProposals=proposalsFromWorkbook;
+        } else rows=parseDelimited(String(reader.result||""));
+        const proposals=rows.__fixtureProposals || readFixtureSheet(rows);
+        if(!proposals.length){ notify("Fixture headings not found. I looked for Red, Blue, Black, Orange, Date and Time/Slot in the first 20 rows and across all Excel sheets."); return; }
+        // Re-import is a fresh proposed schedule. Accepted fixtures stay until a changed row is accepted.
+        update(d=>({...d,fixtureProposals:proposals}));
+        const checks=proposals.map(validateFixtureProposal);
+        notify(`${proposals.length} fixture rows imported · ${checks.filter(x=>x.valid).length} valid · ${checks.filter(x=>!x.valid).length} need review.`);
+      }catch(err){ console.error(err); notify("Could not read that fixture file. Try CSV or XLSX with the six fixture columns."); }
+      finally{ setFixtureImportBusy(false); e.target.value=""; }
+    };
+    if(excel) reader.readAsArrayBuffer(file); else reader.readAsText(file,"utf-8");
+  };
+
+  const acceptFixtureProposal = (proposal) => {
+    const v=validateFixtureProposal(proposal);
+    if(v.players.filter(Boolean).length !== 4){
+      notify("This row has an ambiguous player link. The spelling mismatch itself is allowed, but TT-Pulse still needs one unique player record for scoring.");
+      return;
+    }
+    // Admin manual review is authoritative. Tier mismatch remains a visible warning but does not block Accept.
+    const colors=["red","blue","black","orange"];
+    const pairs=[];
+    for(let i=0;i<colors.length;i++) for(let j=i+1;j<colors.length;j++) pairs.push([i,j]);
+    const newFixtures=pairs.map(([i,j])=>({
+      id:uid(), category:v.category, tierA:v.tier, tierB:v.tier, sameTier:true, hostTier:v.tier,
+      teamA:colors[i], teamB:colors[j], playerA:v.players[i].id, playerB:v.players[j].id,
+      date:v.date, slot:v.slot, needsSlot:false, matchId:null, source:"imported", importedRowId:proposal.id
+    }));
+    update(d=>{
+      // Latest accepted import replaces only UNPLAYED fixtures for this category+tier.
+      // Anything already scored is preserved as tournament history.
+      const kept=(d.fixtures||[]).filter(f=>f.matchId || !(f.category===v.category && Number(f.hostTier)===Number(v.tier)));
+      return {...d,
+        fixtures:[...kept,...newFixtures],
+        fixtureProposals:(d.fixtureProposals||[]).map(p=>p.id===proposal.id ? {...p,accepted:true,acceptedAt:new Date().toISOString()} : p)
+      };
+    });
+    notify(`${catLabel(v.category)} Tier ${v.tier} accepted for ${prettyDate(v.date)} ${v.slot}. It is now in Dashboard and Live Scoring.`);
+  };
+
+  const acceptAllValidProposals = () => {
+    const valid=importedProposals.filter(p=>!p.accepted);
+    if(!valid.length){ notify("No valid imported fixture rows are waiting."); return; }
+    if(!window.confirm(`Accept ${valid.length} valid tier fixture rows and send them to Dashboard?`)) return;
+    // Build all rows in one update so tiers do not overwrite one another accidentally.
+    const accepted=[];
+    valid.forEach(proposal=>{
+      const v=validateFixtureProposal(proposal), colors=["red","blue","black","orange"];
+      const pairs=[]; for(let i=0;i<4;i++) for(let j=i+1;j<4;j++) pairs.push([i,j]);
+      accepted.push({proposal,v,newFixtures:pairs.map(([i,j])=>({id:uid(),category:v.category,tierA:v.tier,tierB:v.tier,sameTier:true,hostTier:v.tier,teamA:colors[i],teamB:colors[j],playerA:v.players[i].id,playerB:v.players[j].id,date:v.date,slot:v.slot,needsSlot:false,matchId:null,source:"imported",importedRowId:proposal.id}))});
+    });
+    update(d=>{
+      const keys=new Set(accepted.map(a=>`${a.v.category}|${a.v.tier}`));
+      const kept=(d.fixtures||[]).filter(f=>f.matchId || !keys.has(`${f.category}|${Number(f.hostTier)}`));
+      const ids=new Set(accepted.map(a=>a.proposal.id));
+      return {...d,
+        fixtures:[...kept,...accepted.flatMap(a=>a.newFixtures)],
+        fixtureProposals:(d.fixtureProposals||[]).map(p=>ids.has(p.id) ? {...p,accepted:true,acceptedAt:new Date().toISOString()} : p)
+      };
+    });
+    notify(`${valid.length} tier fixtures accepted. Dashboard/Upcoming Matches updated.`);
+  };
+
+
   const runPlan = () => {
     const next = {};
 
@@ -7230,6 +7537,53 @@ function FixturesTab({ data, update, tiers, notify }) {
         note={`${fixtures.length} fixtures drawn · exporting the ${shown.length} shown below`}
         notify={notify}
       />
+
+      <section className="card">
+        <header className="card-head">
+          <div>
+            <h2>Imported fixture schedule</h2>
+            <p className="muted" style={{marginTop:6}}>
+              Step 1: TT-Pulse uses the Availability tab as the first check. Step 2: your imported fixture Date + Time is checked against all four players.
+              It shows 4/4, 3/4, etc. with the conflicting player's name. You may still Accept an imported fixture after review; accepted rows go to Dashboard / Upcoming Matches → Live Scoring.
+            </p>
+          </div>
+          <div className="head-tools" style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            <button className="btn btn-primary" disabled={fixtureImportBusy} onClick={()=>fixtureImportRef.current && fixtureImportRef.current.click()}>
+              {fixtureImportBusy ? "Reading…" : "Import Fixture CSV / Excel"}
+            </button>
+            <input ref={fixtureImportRef} type="file" accept=".csv,.xlsx,.xls,.xlsm,text/csv" style={{display:"none"}} onChange={importFixtureFile}/>
+            <button className="btn" disabled={!importedProposals.some(p=>!p.accepted)} onClick={acceptAllValidProposals}>✓ Accept All Reviewed</button>
+          </div>
+        </header>
+        <div className="muted" style={{marginBottom:10}}>
+          Expected columns: <b>Team Red | Team Blue | Team Black | Team Orange | Date | Time Slot</b>. Names are checked against Players; team and tier are checked against Team Formation.
+        </div>
+        {importedProposals.length ? (
+          <div className="table-scroll">
+            <table>
+              <thead><tr><th>Tier</th><th style={{background:"#e11d48",color:"white"}}>Team Red</th><th style={{background:"#2563eb",color:"white"}}>Team Blue</th><th style={{background:"#111827",color:"white"}}>Team Black</th><th style={{background:"#f97316",color:"white"}}>Team Orange</th><th>Date</th><th>Time</th><th>Availability check</th><th>Status</th><th/></tr></thead>
+              <tbody>{importedProposals.map(p=>{
+                const v=validateFixtureProposal(p);
+                return <tr key={p.id}>
+                  <td>{v.tier ? <><b>{catLabel(v.category)}</b><br/>Tier {v.tier}</> : "—"}</td>
+                  <td>{p.red || "—"}</td><td>{p.blue || "—"}</td><td>{p.black || "—"}</td><td>{p.orange || "—"}</td>
+                  <td>{v.date ? prettyDate(v.date) : (p.date || "—")}</td><td>{v.slot || "—"}</td>
+                  <td>
+                    {v.available == null ? <span className="chip chip-quiet">Check manually</span> :
+                     v.available===4 ? <><span className="chip" style={{background:"#dcfce7",color:"#166534"}}>✓ 4/4 green</span><div className="muted small" style={{marginTop:4}}>All four available in Availability tab</div></> :
+                     <><span className="chip" style={{background:"#fef3c7",color:"#92400e"}}>{v.available}/4 green</span>
+                       <div className="small" style={{marginTop:4,color:"#991b1b",whiteSpace:"normal",maxWidth:260}}>
+                         Conflict: {v.unavailableNames.join(", ")}
+                       </div></>}
+                  </td>
+                  <td>{p.accepted ? <span className="chip" style={{background:"#dbeafe",color:"#1d4ed8"}}>✓ ACCEPTED</span> : v.tierMismatch ? <span className="chip" style={{background:"#fee2e2",color:"#991b1b"}} title={v.issue}>⚠ TIER MISMATCH</span> : <span className="chip" style={{background:"#dcfce7",color:"#166534"}}>✓ Ready to accept</span>}<div className="muted small" style={{maxWidth:260,whiteSpace:"normal",marginTop:4}}>{p.accepted ? "Sent to Dashboard + Live Scoring" : v.issue}</div></td>
+                  <td>{p.accepted ? <button className="btn btn-tiny" disabled>✓ Accepted</button> : <button className="btn btn-tiny btn-primary" onClick={()=>acceptFixtureProposal(p)}>✓ Accept</button>}</td>
+                </tr>;
+              })}</tbody>
+            </table>
+          </div>
+        ) : <Empty title="No imported fixture schedule waiting" body="Import the latest CSV/Excel schedule. It will be validated first; nothing is sent to Dashboard until you accept it."/>}
+      </section>
 
       <section className="card">
         <header className="card-head">
@@ -7978,7 +8332,7 @@ function PublicWildCardBanner({ m, data }) {
   );
 }
 
-function DashboardTab({ data, role, notify }) {
+function DashboardTab({ data, role, notify, update, setTab }) {
   const today = ymd(new Date());
   const [day, setDay] = useState(today);
 
@@ -7995,6 +8349,34 @@ function DashboardTab({ data, role, notify }) {
     return p ? fullName(p) : "—";
   };
   const teamOf = (id) => (data.teams.find((t) => t.id === id) || {}).name || "—";
+
+  // Start an accepted fixture directly from Dashboard and open Live Scoring.
+  // The fixture is linked to the new live match so it cannot be started twice.
+  const startAcceptedFixture = (f) => {
+    if (!f || f.matchId) return;
+    const m = {
+      id: uid(),
+      date: f.date || ymd(new Date()),
+      teamA: f.teamA,
+      teamB: f.teamB,
+      category: f.category,
+      individual: !!f.individual,
+      playerA: f.playerA,
+      playerB: f.playerB,
+      sets: [{a:"0",b:"0"},{a:"0",b:"0"},{a:"0",b:"0"}],
+      status: "live",
+      fixtureId: f.id,
+      scorer: (((data.refDuty || {})[f.date || ymd(new Date())] || [])[0] || {}).name || "",
+      wildCards: {a:[],b:[]}
+    };
+    update(d => ({
+      ...d,
+      matches: [m, ...(d.matches || [])],
+      fixtures: (d.fixtures || []).map(x => x.id === f.id ? {...x, matchId:m.id} : x)
+    }));
+    notify(`${nameOf(f.playerA)} v ${nameOf(f.playerB)} started. Opening Live Scoring.`);
+    if (setTab) setTab("scoring");
+  };
 
   // Dashboard needs its own latest-set renderer. The previous build only
   // defined this helper inside StandingsTab, so entering Super Admin and
@@ -8279,6 +8661,11 @@ function DashboardTab({ data, role, notify }) {
                       <span className="muted op-teams">
                         {teamOf(f.teamA)} · {teamOf(f.teamB)}
                       </span>
+                      {role !== "public" ? (
+                        <button className="btn btn-tiny btn-primary" onClick={() => startAcceptedFixture(f)}>
+                          Start Live Scoring
+                        </button>
+                      ) : null}
                     </li>
                   ))}
                   {bySlot[slot].length > 30 ? (
@@ -9988,7 +10375,7 @@ setData(fresh);
 
   const myTabs = tabsFor(role);
   const active = myTabs.some((t) => t.key === tab) ? tab : myTabs[0].key;
-  const tabProps = { data, update, setData, tiers, notify, role };
+  const tabProps = { data, update, setData, tiers, notify, role, setTab };
   const roleLabel = (ROLES.find((r) => r.key === role) || {}).label;
 
   return (
