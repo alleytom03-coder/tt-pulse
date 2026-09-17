@@ -1,3 +1,5 @@
+<!-- TT PULSE LIVE SCORING RESULT-LATER SAFETY 2026-09-17 -->
+<!-- Fixture safe-point preserved; added Result Pending / Enter Result Later workflow only -->
 <!-- TT PULSE RECOVERED TEAMS + ALL-CHANGE AUTOSAVE SAFETY 2026-09-15 -->
 <!-- TT PULSE DEUCE FIX 2026-09-13: normal sets require 2-point margin at/after 10-10; WC2 remains first-to-7 -->
 <!-- TT Pulse WC FOOLPROOF BONUS FIX 2026-09-11: WC result derived from finished set score -->
@@ -420,6 +422,23 @@ window.addEventListener("error", function (e) { var f = document.getElementById(
 </script>
 
 <script type="text/babel" data-presets="react">
+/* 2026-09-17 VERIFIED RESET FIX: force-write and read-back verification; fixture workflow untouched. */
+/* 2026-09-17 SAFE ADDITION: Super Admin Report-tab scoring-only reset. Preserves official fixtures and all setup data.
+   FIX: reset is now written directly to Supabase and confirmed before completion, preventing stale cloud scores from returning. */
+/* TT PULSE MANUAL OFFICIAL ACCEPT OVERRIDE 2026-09-17
+   Participant/admin manual acceptance is authoritative. Tier/availability/name warnings never block Official acceptance.
+   Radio selection remains required. Player links must still resolve so Live Scoring has actual player IDs.
+
+/* TT PULSE OFFICIAL FIXTURE SELECTION CLICKABLE-FIX 2026-09-17
+   Accept as Official is never HTML-disabled; click always gives an action or explicit reason.
+   Radio selection remains required.
+
+/* TT PULSE OFFICIAL FIXTURE SELECTION CLICK-FIX 2026-09-17
+   Fixes Official acceptance status for both System Generated and Imported sources.
+   Prevents false success when no saved system fixture exists.
+   Based on TT PULSE OFFICIAL FIXTURE SELECTION SAFETY 2026-09-17
+   Branches from Result-Later version. Imported availability/fixture updates cannot silently decide Live Scoring.
+   Per tier: choose System Generated or Imported, then Accept as Official. Only official fixtures feed Live Scoring. */
 const { useState, useEffect, useMemo, useRef } = React;
 
 /* ============================================================
@@ -4409,6 +4428,9 @@ function ScoringTab({ data, update, notify }) {
   const [dutyTyped, setDutyTyped] = useState("");
   const [scorer, setScorer] = useState("");
   const [wcPick, setWcPick] = useState({});
+  // Delayed-entry safety: a referee can leave a fixture as Result Pending and
+  // enter all three final set scores later without using point-by-point scoring.
+  const [delayedDraft, setDelayedDraft] = useState({});
 
   const teamById = (id) => data.teams.find((t) => t.id === id);
   const isKidsTeam = (t) => !!t && (String(t.ageGroup || "").toLowerCase() === "kids" || String(t.id || "").startsWith("kids-"));
@@ -4455,7 +4477,7 @@ function ScoringTab({ data, update, notify }) {
   // Every accepted fixture is visible in Live Scoring immediately.
   // Today's fixtures stay first, followed by future accepted fixtures.
   const todaysFixtures = (data.fixtures || [])
-    .filter((f) => !f.matchId)
+    .filter((f) => !f.matchId && f.official !== false)
     .sort((a, b) => {
       const aToday = fDateKey(a) === todayStr ? 0 : 1;
       const bToday = fDateKey(b) === todayStr ? 0 : 1;
@@ -4492,6 +4514,54 @@ function ScoringTab({ data, update, notify }) {
       fixtures: (d.fixtures || []).map((x) => (x.id === f.id ? { ...x, matchId: m.id } : x)),
     }));
     notify(`${nameOf(f.playerA)} v ${nameOf(f.playerB)} is on the scoreboard.`);
+  };
+
+  const markResultPending = (f) => {
+    const m = {
+      id: uid(), date: f.date || todayStr, teamA: f.teamA, teamB: f.teamB,
+      category: f.category, individual: !!f.individual, playerA: f.playerA, playerB: f.playerB,
+      sets: [{a:"0",b:"0"},{a:"0",b:"0"},{a:"0",b:"0"}],
+      status: "result_pending", entryMode: "later", fixtureId: f.id,
+      scorer: scorer || (dutyFor(f.date || todayStr)[0] || {}).name || "",
+      wildCards: {a:[],b:[]}, resultPendingAt: new Date().toISOString()
+    };
+    update((d) => ({
+      ...d,
+      matches: [m, ...(d.matches || [])],
+      fixtures: (d.fixtures || []).map((x) => x.id === f.id ? {...x, matchId:m.id, resultPending:true} : x)
+    }));
+    setDelayedDraft((old)=>({...old,[m.id]:[{a:"",b:""},{a:"",b:""},{a:"",b:""}]}));
+    notify(`${nameOf(f.playerA)} v ${nameOf(f.playerB)} marked Result Pending. Enter the three set scores later.`);
+  };
+
+  const delayedValue = (m,i,side) => {
+    const d = delayedDraft[m.id];
+    if (d && d[i]) return d[i][side];
+    const v = m.sets && m.sets[i] ? m.sets[i][side] : "";
+    return String(v) === "0" ? "" : String(v);
+  };
+  const setDelayedValue = (mid,i,side,value) => setDelayedDraft((old)=>{
+    const base = old[mid] ? old[mid].map(x=>({...x})) : [{a:"",b:""},{a:"",b:""},{a:"",b:""}];
+    base[i][side] = value.replace(/[^0-9]/g,"");
+    return {...old,[mid]:base};
+  });
+  const submitDelayedResult = (m) => {
+    const draft = delayedDraft[m.id] || [{a:"",b:""},{a:"",b:""},{a:"",b:""}];
+    if (draft.some(x=>x.a==="" || x.b==="")) { notify("Enter both players' scores for all 3 sets."); return; }
+    const sets = draft.map(x=>({a:String(Math.max(0,Number(x.a)||0)),b:String(Math.max(0,Number(x.b)||0))}));
+    const test = {...m, sets};
+    for (let i=0;i<3;i++) {
+      if (!setDoneForMatch(test,i)) { notify(`Set ${i+1} is not a valid completed set score.`); return; }
+    }
+    const result = matchResult(test);
+    if (!result.complete) { notify("All 3 completed sets are required before this result can be submitted."); return; }
+    update((d)=>({
+      ...d,
+      matches:(d.matches||[]).map(x=>x.id===m.id ? {...x,sets,status:"final",entryMode:"later",manualResult:true,manualResultAt:new Date().toISOString()} : x),
+      fixtures:(d.fixtures||[]).map(f=>f.id===m.fixtureId ? {...f,resultPending:false} : f)
+    }));
+    setDelayedDraft((old)=>{const n={...old}; delete n[m.id]; return n;});
+    notify(`Result saved for ${nameOf(m.playerA)} v ${nameOf(m.playerB)}. Team points and standings will update automatically.`);
   };
 
   /* Every pairing that has already met, whether it came from a fixture or
@@ -4913,9 +4983,14 @@ function ScoringTab({ data, update, notify }) {
                 <span className="muted op-teams">
                   {prettyDate(f.date)} · {f.slot || "time not set"} · ✓ Accepted
                 </span>
-                <button className="btn btn-tiny btn-primary" onClick={() => startFromFixture(f)}>
-                  Start Live Scoring
-                </button>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",justifyContent:"flex-end"}}>
+                  <button className="btn btn-tiny btn-primary" onClick={() => startFromFixture(f)}>
+                    Start Live Scoring
+                  </button>
+                  <button className="btn btn-tiny" onClick={() => markResultPending(f)} title="Keep this fixture open and enter the three final set scores after the match">
+                    Enter Result Later
+                  </button>
+                </div>
               </li>
             ))}
           </ul>
@@ -5037,15 +5112,16 @@ function ScoringTab({ data, update, notify }) {
             <section className={"board" + (m.status === "live" ? " live" : "")} key={m.id}>
               <div className="board-top">
                 <span className={"status " + m.status}>
-                  {m.status === "live" ? "Live now" : "Final"}
+                  {m.status === "live" ? "Live now" : m.status === "result_pending" ? "⚠ Result Pending" : "Final"}
                 </span>
                 <span className="mono muted">{prettyDate(m.date)}</span>
                 <div className="board-top-actions">
                   <button
                     className="btn btn-tiny"
                     onClick={() => setStatus(m.id, m.status === "live" ? "final" : "live")}
+                    disabled={m.status === "result_pending"}
                   >
-                    {m.status === "live" ? "Mark final" : "Reopen"}
+                    {m.status === "live" ? "Mark final" : m.status === "result_pending" ? "Waiting for result" : "Reopen"}
                   </button>
                   <button className="btn btn-tiny btn-danger" onClick={() => removeMatch(m.id)}>
                     Delete
@@ -5071,7 +5147,30 @@ function ScoringTab({ data, update, notify }) {
                 </div>
               </div>
 
-              {active >= 0 && !r.complete ? (
+              {m.status === "result_pending" ? (
+                <div className="card" style={{margin:"12px",border:"2px solid #f59e0b"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"center",flexWrap:"wrap"}}>
+                    <div><b>📝 Enter Result Later</b><div className="muted small">Enter the final score of all 3 sets. No point-by-point entry is required.</div></div>
+                    <span className="chip" style={{background:"#fef3c7",color:"#92400e"}}>RESULT PENDING</span>
+                  </div>
+                  <div className="sets-row" style={{marginTop:10}}>
+                    {[0,1,2].map(i=>(
+                      <div className="set-box" key={i}>
+                        <span className="set-label">Set {i+1}</span>
+                        <div className="set-inputs">
+                          <input className="mono" inputMode="numeric" placeholder="A" value={delayedValue(m,i,"a")} onChange={e=>setDelayedValue(m.id,i,"a",e.target.value)} />
+                          <span>:</span>
+                          <input className="mono" inputMode="numeric" placeholder="B" value={delayedValue(m,i,"b")} onChange={e=>setDelayedValue(m.id,i,"b",e.target.value)} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <button className="btn btn-primary" style={{marginTop:10}} onClick={()=>submitDelayedResult(m)}>Save Completed Result</button>
+                  <div className="muted small" style={{marginTop:6}}>TT-Pulse validates all three completed sets, then calculates the normal set/match points and updates standings automatically.</div>
+                </div>
+              ) : null}
+
+              {m.status !== "result_pending" && active >= 0 && !r.complete ? (
                 <div className="wc-live-control">
                   <div className="wc-live-title">
                     <b>🎟️ Wild Card — available before the first rally of Set {active + 1}</b>
@@ -5118,7 +5217,7 @@ function ScoringTab({ data, update, notify }) {
                 </div>
               ) : null}
 
-              {active >= 0 ? (
+              {m.status !== "result_pending" && active >= 0 ? (
                 <div className="rally">
                   <div className="rally-label">
                     Set {active + 1} · {wildCardsForSet(m, active).some(w => w.card === "wc2") ? "WC2 RACE TO 7" : "first to 11"}
@@ -5152,7 +5251,7 @@ function ScoringTab({ data, update, notify }) {
                     </div>
                   </div>
                 </div>
-              ) : (
+              ) : m.status === "result_pending" ? null : (
                 <div className="rally done">
                   <div className="rally-label">
                     Match over — {r.winner === "a" ? (pa ? fullName(pa) : "Team A") : pb ? fullName(pb) : "Team B"} wins{" "}
@@ -5161,7 +5260,7 @@ function ScoringTab({ data, update, notify }) {
                 </div>
               )}
 
-              <div className="sets-row">
+              {m.status !== "result_pending" ? <div className="sets-row">
                 {m.sets.map((s, i) => {
                   const done = setDoneForMatch(m, i);
                   return (
@@ -5188,7 +5287,7 @@ function ScoringTab({ data, update, notify }) {
                     </div>
                   );
                 })}
-              </div>
+              </div> : null}
             </section>
           );
         })
@@ -6703,6 +6802,7 @@ function FixturesTab({ data, update, tiers, notify }) {
   const [openTier, setOpenTier] = useState(null);
   const fixtureImportRef = useRef(null);
   const [fixtureImportBusy, setFixtureImportBusy] = useState(false);
+  const [fixtureChoice, setFixtureChoice] = useState({}); // cat|tier -> system/imported
 
   // FINAL FIXTURES SOURCE
   // Adult fixtures are built directly from the accepted Team Formation rows.
@@ -7268,8 +7368,24 @@ function FixturesTab({ data, update, tiers, notify }) {
         } else rows=parseDelimited(String(reader.result||""));
         const proposals=rows.__fixtureProposals || readFixtureSheet(rows);
         if(!proposals.length){ notify("Fixture headings not found. I looked for Red, Blue, Black, Orange, Date and Time/Slot in the first 20 rows and across all Excel sheets."); return; }
-        // Re-import is a fresh proposed schedule. Accepted fixtures stay until a changed row is accepted.
-        update(d=>({...d,fixtureProposals:proposals}));
+        // Re-import is a fresh proposal. Preserve the current system-generated fixtures,
+        // but require an explicit Official Fixture choice before Live Scoring can use that tier.
+        const proposalChecks=proposals.map(validateFixtureProposal);
+        const affectedKeys=new Set(proposalChecks.filter(v=>v.category && v.tier).map(v=>`${v.category}|${Number(v.tier)}`));
+        update(d=>{
+          const snapshots={...(d.systemFixtureOptions||{})};
+          affectedKeys.forEach(key=>{
+            const [cat,tierText]=key.split("|"); const tierNum=Number(tierText);
+            const current=(d.fixtures||[]).filter(f=>!f.matchId && f.category===cat && Number(f.hostTier)===tierNum && String(f.source||"system")!=="imported");
+            if(current.length) snapshots[key]=current.map(f=>({...f,official:false,source:f.source||"system"}));
+          });
+          return {...d,
+            fixtureProposals:proposals,
+            systemFixtureOptions:snapshots,
+            fixtures:(d.fixtures||[]).map(f=> affectedKeys.has(`${f.category}|${Number(f.hostTier)}`) && !f.matchId ? {...f,official:false} : f)
+          };
+        });
+        setFixtureChoice({});
         const checks=proposals.map(validateFixtureProposal);
         notify(`${proposals.length} fixture rows imported · ${checks.filter(x=>x.valid).length} valid · ${checks.filter(x=>!x.valid).length} need review.`);
       }catch(err){ console.error(err); notify("Could not read that fixture file. Try CSV or XLSX with the six fixture columns."); }
@@ -7284,14 +7400,14 @@ function FixturesTab({ data, update, tiers, notify }) {
       notify("This row has an ambiguous player link. The spelling mismatch itself is allowed, but TT-Pulse still needs one unique player record for scoring.");
       return;
     }
-    // Admin manual review is authoritative. Tier mismatch remains a visible warning but does not block Accept.
+    // Admin/participant manual review is authoritative. Tier, name and availability warnings do not block Accept.
     const colors=["red","blue","black","orange"];
     const pairs=[];
     for(let i=0;i<colors.length;i++) for(let j=i+1;j<colors.length;j++) pairs.push([i,j]);
     const newFixtures=pairs.map(([i,j])=>({
       id:uid(), category:v.category, tierA:v.tier, tierB:v.tier, sameTier:true, hostTier:v.tier,
       teamA:colors[i], teamB:colors[j], playerA:v.players[i].id, playerB:v.players[j].id,
-      date:v.date, slot:v.slot, needsSlot:false, matchId:null, source:"imported", importedRowId:proposal.id
+      date:v.date, slot:v.slot, needsSlot:false, matchId:null, source:"imported", official:true, importedRowId:proposal.id
     }));
     update(d=>{
       // Latest accepted import replaces only UNPLAYED fixtures for this category+tier.
@@ -7299,10 +7415,39 @@ function FixturesTab({ data, update, tiers, notify }) {
       const kept=(d.fixtures||[]).filter(f=>f.matchId || !(f.category===v.category && Number(f.hostTier)===Number(v.tier)));
       return {...d,
         fixtures:[...kept,...newFixtures],
-        fixtureProposals:(d.fixtureProposals||[]).map(p=>p.id===proposal.id ? {...p,accepted:true,acceptedAt:new Date().toISOString()} : p)
+        fixtureProposals:(d.fixtureProposals||[]).map(p=>p.id===proposal.id ? {...p,accepted:true,officialSource:"imported",acceptedAt:new Date().toISOString(),officialAt:new Date().toISOString()} : p)
       };
     });
-    notify(`${catLabel(v.category)} Tier ${v.tier} accepted for ${prettyDate(v.date)} ${v.slot}. It is now in Dashboard and Live Scoring.`);
+    setFixtureChoice(c=>({...c,[`${v.category}|${Number(v.tier)}`]:"imported"}));
+    notify(`${catLabel(v.category)} Tier ${v.tier}: IMPORTED fixture is now Official and is the only version sent to Live Scoring.`);
+  };
+
+  const acceptSystemFixture = (proposal) => {
+    const v=validateFixtureProposal(proposal);
+    if(!v.category || !v.tier){ notify("TT-Pulse cannot identify the category/tier for this row yet."); return; }
+    const key=`${v.category}|${Number(v.tier)}`;
+    const savedNow=((data.systemFixtureOptions||{})[key]||[]);
+    if(!savedNow.length){
+      notify(`${catLabel(v.category)} Tier ${v.tier}: no System Generated fixture is saved for this tier. Choose Imported, or generate the system fixture first.`);
+      return;
+    }
+    update(d=>{
+      const saved=((d.systemFixtureOptions||{})[key]||[]).map(f=>({...f,official:true,source:"system",matchId:f.matchId||null}));
+      const kept=(d.fixtures||[]).filter(f=>f.matchId || !(f.category===v.category && Number(f.hostTier)===Number(v.tier)));
+      return {...d,
+        fixtures:[...kept,...saved],
+        fixtureProposals:(d.fixtureProposals||[]).map(p=>p.id===proposal.id ? {...p,accepted:false,officialSource:"system",officialAt:new Date().toISOString()} : p)
+      };
+    });
+    setFixtureChoice(c=>({...c,[key]:"system"}));
+    notify(`${catLabel(v.category)} Tier ${v.tier}: SYSTEM GENERATED fixture accepted as Official.`);
+  };
+
+  const acceptSelectedFixture = (proposal) => {
+    const v=validateFixtureProposal(proposal); const key=`${v.category}|${Number(v.tier)}`;
+    const choice=fixtureChoice[key];
+    if(!choice){ notify("Choose System Generated or Imported first, then Accept as Official Fixture."); return; }
+    if(choice==="system") acceptSystemFixture(proposal); else acceptFixtureProposal(proposal);
   };
 
   const acceptAllValidProposals = () => {
@@ -7314,7 +7459,7 @@ function FixturesTab({ data, update, tiers, notify }) {
     valid.forEach(proposal=>{
       const v=validateFixtureProposal(proposal), colors=["red","blue","black","orange"];
       const pairs=[]; for(let i=0;i<4;i++) for(let j=i+1;j<4;j++) pairs.push([i,j]);
-      accepted.push({proposal,v,newFixtures:pairs.map(([i,j])=>({id:uid(),category:v.category,tierA:v.tier,tierB:v.tier,sameTier:true,hostTier:v.tier,teamA:colors[i],teamB:colors[j],playerA:v.players[i].id,playerB:v.players[j].id,date:v.date,slot:v.slot,needsSlot:false,matchId:null,source:"imported",importedRowId:proposal.id}))});
+      accepted.push({proposal,v,newFixtures:pairs.map(([i,j])=>({id:uid(),category:v.category,tierA:v.tier,tierB:v.tier,sameTier:true,hostTier:v.tier,teamA:colors[i],teamB:colors[j],playerA:v.players[i].id,playerB:v.players[j].id,date:v.date,slot:v.slot,needsSlot:false,matchId:null,source:"imported",official:true,importedRowId:proposal.id}))});
     });
     update(d=>{
       const keys=new Set(accepted.map(a=>`${a.v.category}|${a.v.tier}`));
@@ -7383,7 +7528,7 @@ function FixturesTab({ data, update, tiers, notify }) {
       notify("Calibrate players and put them on teams first.");
       return;
     }
-    const built = buildFixtureRows(plan, false);
+    const built = buildFixtureRows(plan, false).map(f=>({...f,source:f.source||"system",official:true}));
     if (!built.length) {
       notify("No fixtures — you need at least two teams with calibrated players in them.");
       return;
@@ -7544,7 +7689,7 @@ function FixturesTab({ data, update, tiers, notify }) {
             <h2>Imported fixture schedule</h2>
             <p className="muted" style={{marginTop:6}}>
               Step 1: TT-Pulse uses the Availability tab as the first check. Step 2: your imported fixture Date + Time is checked against all four players.
-              It shows 4/4, 3/4, etc. with the conflicting player's name. You may still Accept an imported fixture after review; accepted rows go to Dashboard / Upcoming Matches → Live Scoring.
+              It shows 4/4, 3/4, etc. with the conflicting player's name. For each tier, choose System Generated or Imported, then press Accept as Official. Only that Official fixture goes to Dashboard / Upcoming Matches → Live Scoring.
             </p>
           </div>
           <div className="head-tools" style={{display:"flex",gap:8,flexWrap:"wrap"}}>
@@ -7552,7 +7697,7 @@ function FixturesTab({ data, update, tiers, notify }) {
               {fixtureImportBusy ? "Reading…" : "Import Fixture CSV / Excel"}
             </button>
             <input ref={fixtureImportRef} type="file" accept=".csv,.xlsx,.xls,.xlsm,text/csv" style={{display:"none"}} onChange={importFixtureFile}/>
-            <button className="btn" disabled={!importedProposals.some(p=>!p.accepted)} onClick={acceptAllValidProposals}>✓ Accept All Reviewed</button>
+            <span className="muted small">Choose and accept each tier individually for match-day safety.</span>
           </div>
         </header>
         <div className="muted" style={{marginBottom:10}}>
@@ -7576,8 +7721,13 @@ function FixturesTab({ data, update, tiers, notify }) {
                          Conflict: {v.unavailableNames.join(", ")}
                        </div></>}
                   </td>
-                  <td>{p.accepted ? <span className="chip" style={{background:"#dbeafe",color:"#1d4ed8"}}>✓ ACCEPTED</span> : v.tierMismatch ? <span className="chip" style={{background:"#fee2e2",color:"#991b1b"}} title={v.issue}>⚠ TIER MISMATCH</span> : <span className="chip" style={{background:"#dcfce7",color:"#166534"}}>✓ Ready to accept</span>}<div className="muted small" style={{maxWidth:260,whiteSpace:"normal",marginTop:4}}>{p.accepted ? "Sent to Dashboard + Live Scoring" : v.issue}</div></td>
-                  <td>{p.accepted ? <button className="btn btn-tiny" disabled>✓ Accepted</button> : <button className="btn btn-tiny btn-primary" onClick={()=>acceptFixtureProposal(p)}>✓ Accept</button>}</td>
+                  <td>{p.officialSource==="system" ? <span className="chip" style={{background:"#dcfce7",color:"#166534"}}>✓ SYSTEM OFFICIAL</span> : (p.officialSource==="imported" || p.accepted) ? <span className="chip" style={{background:"#dbeafe",color:"#1d4ed8"}}>✓ IMPORTED OFFICIAL</span> : v.tierMismatch ? <span className="chip" style={{background:"#fef3c7",color:"#92400e"}} title={v.issue}>⚠ TIER WARNING — CAN ACCEPT</span> : <span className="chip" style={{background:"#fef3c7",color:"#92400e"}}>Choose Official Source</span>}<div className="muted small" style={{maxWidth:260,whiteSpace:"normal",marginTop:4}}>{p.officialSource ? "Accepted — only this Official fixture feeds Live Scoring" : v.issue}</div></td>
+                  <td style={{minWidth:210}}>{(()=>{ const key=`${v.category}|${Number(v.tier)}`; const ch=fixtureChoice[key]||p.officialSource||""; return <div style={{display:"grid",gap:6}}>
+                    <label className="small" style={{display:"flex",gap:6,alignItems:"center"}}><input type="radio" name={"official-"+key} checked={ch==="system"} onChange={()=>setFixtureChoice(c=>({...c,[key]:"system"}))}/> System Generated</label>
+                    <label className="small" style={{display:"flex",gap:6,alignItems:"center"}}><input type="radio" name={"official-"+key} checked={ch==="imported"} onChange={()=>setFixtureChoice(c=>({...c,[key]:"imported"}))}/> Imported</label>
+                    <button type="button" className="btn btn-tiny btn-primary" onClick={(e)=>{e.preventDefault(); e.stopPropagation(); acceptSelectedFixture(p);}}>✓ Accept as Official</button>
+                    {v.tierMismatch ? <span className="small" style={{color:"#92400e"}}>⚠ Tier mismatch — manual acceptance allowed</span> : null}
+                  </div>; })()}</td>
                 </tr>;
               })}</tbody>
             </table>
@@ -8757,12 +8907,80 @@ function DashboardTab({ data, role, notify, update, setTab }) {
    Tab: Report — day one to the closing match
    ============================================================ */
 
-function ReportTab({ data, tiers, notify }) {
+function ReportTab({ data, tiers, notify, update, role }) {
   const days = Array.from(new Set(data.matches.map((m) => m.date))).sort();
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [year, setYear] = useState("");
   const [h2hPlayer, setH2hPlayer] = useState("");
+  const [resettingScores, setResettingScores] = useState(false);
+  const resetScoringOnly = async () => {
+    if (role !== "super") { notify("Only Super Admin can reset match scoring."); return; }
+    if (resettingScores) return;
+    if (!confirm("RESET MATCH RESULTS / LIVE SCORING?\n\nThis clears ALL old/test/live match results and scoring links.\n\nPlayers, availability, calibration, tiers, teams and ACCEPTED/OFFICIAL FIXTURES stay unchanged.")) return;
+
+    setResettingScores(true);
+    try {
+      const clean = {
+        ...data,
+        matches: [],
+        bonuses: {},
+        fixtures: (data.fixtures || []).map((f) => {
+          const n = { ...f };
+          delete n.matchId;
+          delete n.resultPending;
+          delete n.liveMatchId;
+          return n;
+        }),
+      };
+      const json = JSON.stringify(clean);
+
+      // 1. Change the screen immediately.
+      setFrom(""); setTo(""); setH2hPlayer("");
+      update(() => clean);
+      try { localStorage.setItem(STORE_KEY, json); } catch (e) {}
+      try { localStorage.removeItem("tt_pulse_wc_integrated_test_v1"); } catch (e) {}
+
+      // 2. Force the exact clean document to Supabase (do not depend on the
+      // debounced autosave), using the same credentials as normal TT-Pulse saves.
+      const C = window.TT_CLOUD;
+      if (C && C.url && C.anonKey) {
+        const token = window.TT_AUTH_TOKEN || sessionStorage.getItem("tt_auth_token") || C.anonKey;
+        const base = C.url.replace(/\/+$/, "") + "/rest/v1/" + C.table;
+        const response = await fetch(base + "?on_conflict=id", {
+          method: "POST",
+          headers: {
+            apikey: C.anonKey,
+            Authorization: "Bearer " + token,
+            "Content-Type": "application/json",
+            Prefer: "resolution=merge-duplicates,return=representation"
+          },
+          body: JSON.stringify([{ id: C.row, doc: clean, updated_at: new Date().toISOString() }])
+        });
+        const body = await response.text();
+        if (!response.ok) throw new Error("Cloud reset failed (" + response.status + "): " + body);
+
+        // 3. Read it back. Do not claim success unless the database itself says 0 matches.
+        const verify = await fetch(base + "?id=eq." + encodeURIComponent(C.row) + "&select=doc,updated_at", {
+          headers: { apikey: C.anonKey, Authorization: "Bearer " + token }
+        });
+        const rows = verify.ok ? await verify.json() : [];
+        const saved = rows && rows[0] && rows[0].doc;
+        if (!saved || !Array.isArray(saved.matches) || saved.matches.length !== 0) {
+          throw new Error("Reset could not be verified in the database.");
+        }
+        const verifiedJson = JSON.stringify(saved);
+        try { localStorage.setItem(STORE_KEY, verifiedJson); } catch (e) {}
+      }
+
+      notify("RESET VERIFIED — 0 matches. Official fixtures are preserved for fresh scoring.");
+    } catch (err) {
+      console.error(err);
+      notify("RESET FAILED — " + (err?.message || err));
+    } finally {
+      setResettingScores(false);
+    }
+  };
 
   /* A season is a year. The report opens on the most recent one, which is
      what the awards night wants, and the dates below still override it. */
@@ -9082,6 +9300,18 @@ function ReportTab({ data, tiers, notify }) {
 };
   return (
     <div className="stack">
+      {role === "super" ? (
+        <section className="card" style={{border:"2px solid #f59e0b"}}>
+          <header className="card-head">
+            <div>
+              <h2>Fresh Tournament Scoring</h2>
+              <p className="muted" style={{margin:"4px 0 0"}}>Clear test/live scores before the real matches. Official fixtures stay exactly as accepted.</p>
+            </div>
+            <button type="button" className="btn danger" onClick={resetScoringOnly} disabled={resettingScores}>{resettingScores ? "Resetting…" : "Reset Match Results / Live Scoring"}</button>
+          </header>
+          <p className="muted" style={{margin:0}}>Keeps: Players · Availability · Calibration · Tiers · Teams · Official Fixtures. Clears: Match scores · pending/live matches · Wild Card results · manual team bonus points.</p>
+        </section>
+      ) : null}
       <section className="card">
         <header className="card-head">
           <h2>Tournament report{season ? " " + season : ""}</h2>
