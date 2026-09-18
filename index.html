@@ -39,6 +39,7 @@
 </style>
 </head>
 <body>
+<!-- TT PULSE OFFICIAL WILD CARD ELIGIBILITY FIX 2026-09-18: Adults 9 (each type once/opponent); Kids 3 total; one WC/player/league; one WC/match; league-only; +20 unchanged -->
 <div id="root"><div id="fallback">Loading. If this message stays, connect to the internet once so the page can fetch React, then reload.</div></div>
 
 <script>
@@ -4694,9 +4695,39 @@ function ScoringTab({ data, update, notify }) {
     setPlayerB("");
   };
 
-  // Wild Cards are allocated per team-vs-opponent pairing.
-  // With 4 teams, each team has 3 cards against each of its 3 opponents = 9 total.
-  // WC1/WC2/WC3 may each be used once against the same opponent.
+  // OFFICIAL LEAGUE WILD CARD RULES (18 Sep 2026)
+  // Adults: WC1/WC2/WC3 once against EACH opposing team (max 9 per team with 4 teams).
+  // Kids: WC1/WC2/WC3 once across the ENTIRE league (max 3 per team).
+  // Every player may call only ONE Wild Card in the entire league.
+  // Every individual match may contain only ONE Wild Card total.
+  // Wild Cards are league-only; labelled Semi/Final matches are blocked.
+  const isKidsWildCardMatch = (m) => m && (m.fixtureGroup === "kids" || isKid(m.category));
+  const isKnockoutWildCardMatch = (m) => {
+    const text = [m && m.stage, m && m.round, m && m.session, m && m.fixtureStage, m && m.matchType]
+      .filter(Boolean).join(" ").toLowerCase();
+    return /semi|final|knockout/.test(text);
+  };
+  const playerUsedWildCardInLeague = (playerId) => {
+    if (!playerId) return false;
+    return (data.matches || []).some((match) => {
+      if (isKnockoutWildCardMatch(match)) return false;
+      if (String(match.playerA) === String(playerId) && (((match.wildCards || {}).a) || []).length) return true;
+      if (String(match.playerB) === String(playerId) && (((match.wildCards || {}).b) || []).length) return true;
+      return false;
+    });
+  };
+  const wildCardUsageWholeLeague = (teamId) => {
+    const used = new Set();
+    (data.matches || []).forEach((match) => {
+      if (isKnockoutWildCardMatch(match)) return;
+      const aId = resolveMatchTeamId(data, match, "a");
+      const bId = resolveMatchTeamId(data, match, "b");
+      const side = String(aId) === String(teamId) ? "a" : String(bId) === String(teamId) ? "b" : null;
+      if (!side) return;
+      (((match.wildCards || {})[side]) || []).forEach((w) => { if (w && w.card) used.add(String(w.card)); });
+    });
+    return used;
+  };
   const wildCardUsageVsOpponent = (teamId, opponentId) => {
     const used = new Set();
     (data.matches || []).forEach((match) => {
@@ -4735,17 +4766,21 @@ function ScoringTab({ data, update, notify }) {
 
   const canCallWildCard = (m, setIndex, side) => {
     if (!m || setIndex < 0 || matchResult(m).complete) return false;
+    if (isKnockoutWildCardMatch(m)) return false;
     if (!wildCardWindowOpen(m, setIndex)) return false;
 
-    // One Wild Card per team in a set. The other team may still call its own card.
-    const ownAlready = wildCardsForSet(m, setIndex).some((w) => w.side === side);
-    if (ownAlready) return false;
+    // Official rule: only ONE Wild Card total may be used in an individual match.
+    if (allWildCards(m).length > 0) return false;
 
-    // Each team has exactly 3 Wild Cards against this opponent (WC1, WC2, WC3).
+    // Official rule: a player may use only ONE Wild Card in the entire league.
+    const playerId = side === "a" ? m.playerA : m.playerB;
+    if (playerUsedWildCardInLeague(playerId)) return false;
+
     const teamId = resolveMatchTeamId(data, m, side);
     const opponentSide = side === "a" ? "b" : "a";
     const opponentId = resolveMatchTeamId(data, m, opponentSide);
-    return wildCardCountVsOpponent(teamId, opponentId) < 3;
+    const used = isKidsWildCardMatch(m) ? wildCardUsageWholeLeague(teamId) : wildCardUsageVsOpponent(teamId, opponentId);
+    return used.size < 3;
   };
 
   const setWcChoice = (mid, side, patch) => {
@@ -4763,23 +4798,31 @@ function ScoringTab({ data, update, notify }) {
     if (i < 0) { notify("The match is already complete."); return; }
 
     if (!canCallWildCard(m, i, side)) {
-      const ownAlready = wildCardsForSet(m, i).some((w) => w.side === side);
-      notify(ownAlready
-        ? `This team has already called a Wild Card in Set ${i + 1}.`
-        : "Wild Card can only be called at the beginning of a set, before the first rally.");
+      const playerId = side === "a" ? m.playerA : m.playerB;
+      const reason = isKnockoutWildCardMatch(m)
+        ? "Wild Cards are available only in League matches, not Semi Finals or Finals."
+        : allWildCards(m).length > 0
+          ? "Only one Wild Card can be used in an individual match."
+          : playerUsedWildCardInLeague(playerId)
+            ? `${nameOf(playerId)} has already used a Wild Card in the League and cannot use another.`
+            : "Wild Card can only be called at the beginning of a set, before the first rally.";
+      notify(reason);
       return;
     }
 
     const teamId = resolveMatchTeamId(data, m, side);
     const opponentSide = side === "a" ? "b" : "a";
     const opponentId = resolveMatchTeamId(data, m, opponentSide);
-    const usedVsOpponent = wildCardUsageVsOpponent(teamId, opponentId);
-    if (usedVsOpponent.size >= 3) {
-      notify(`All 3 Wild Cards have already been used against this opponent.`);
+    const kidsRule = isKidsWildCardMatch(m);
+    const usedAllowance = kidsRule ? wildCardUsageWholeLeague(teamId) : wildCardUsageVsOpponent(teamId, opponentId);
+    if (usedAllowance.size >= 3) {
+      notify(kidsRule ? "All 3 Kids Wild Cards have already been used in the League." : "WC1, WC2 and WC3 have already been used against this opponent.");
       return;
     }
-    if (cardUsedByTeamVsOpponent(teamId, opponentId, choice.card)) {
-      notify(`${choice.card.toUpperCase()} has already been used against this opponent.`);
+    if (usedAllowance.has(String(choice.card))) {
+      notify(kidsRule
+        ? `${choice.card.toUpperCase()} has already been used by this Kids team in the League.`
+        : `${choice.card.toUpperCase()} has already been used against this opponent.`);
       return;
     }
 
@@ -5301,14 +5344,20 @@ function ScoringTab({ data, update, notify }) {
                       const opponentTid = resolveMatchTeamId(data, m, opponentSide);
                       const opponentTeam = teamById(opponentTid);
                       const resolvedTid = resolveMatchTeamId(data, m, side);
-                      const usedVsOpponent = wildCardUsageVsOpponent(resolvedTid, opponentTid);
-                      const usedCount = usedVsOpponent.size;
+                      const kidsRule = isKidsWildCardMatch(m);
+                      const usedAllowance = kidsRule ? wildCardUsageWholeLeague(resolvedTid) : wildCardUsageVsOpponent(resolvedTid, opponentTid);
+                      const usedCount = usedAllowance.size;
+                      const playerIdForSide = side === "a" ? m.playerA : m.playerB;
+                      const playerAlreadyUsed = playerUsedWildCardInLeague(playerIdForSide);
+                      const matchAlreadyHasWildCard = allWildCards(m).length > 0;
                       const canCall = canCallWildCard(m, active, side);
                       return (
                         <div className="wc-live-side" key={side}>
                           <strong>{team ? team.name : side.toUpperCase()}</strong>
                           <div className="muted small" style={{margin:"4px 0 8px"}}>
-                            Wild Cards vs {opponentTeam ? opponentTeam.name : "opponent"}: <b>{usedCount} / 3 used</b> · {Math.max(0,3-usedCount)} remaining
+                            {kidsRule ? "Kids League Wild Cards" : `Wild Cards vs ${opponentTeam ? opponentTeam.name : "opponent"}`}: <b>{usedCount} / 3 used</b> · {Math.max(0,3-usedCount)} remaining
+                            {playerAlreadyUsed ? " · PLAYER WC ALREADY USED" : ""}
+                            {matchAlreadyHasWildCard ? " · MATCH WC ALREADY USED" : ""}
                           </div>
                           {already.length ? (
                             <span className="wc-active-chip">{already.map(w => w.card.toUpperCase()).join(", ")} ACTIVE</span>
@@ -5318,8 +5367,8 @@ function ScoringTab({ data, update, notify }) {
                                 onChange={(e)=>setWcChoice(m.id,side,{card:e.target.value})}>
                                 <option value="">Choose Wild Card</option>
                                 {TT_WILD_CARDS.map((w)=>(
-                                  <option key={w.id} value={w.id} disabled={cardUsedByTeamVsOpponent(resolvedTid,opponentTid,w.id)}>
-                                    {w.short} — {w.name}{cardUsedByTeamVsOpponent(resolvedTid,opponentTid,w.id) ? " — USED vs this opponent" : ""}
+                                  <option key={w.id} value={w.id} disabled={usedAllowance.has(String(w.id))}>
+                                    {w.short} — {w.name}{usedAllowance.has(String(w.id)) ? (kidsRule ? " — USED in Kids League" : " — USED vs this opponent") : ""}
                                   </option>
                                 ))}
                               </select>
@@ -5693,7 +5742,7 @@ function StandingsTab({ data, update, notify }) {
         columns={columns}
         rows={rows}
         onImport={onImport}
-        note="Set Pts and Match Pts come from played matches. Each team has 3 Wild Cards against each opponent (9 total in a 4-team league). Wild Card Bonus remains automatic: +20 for every Wild Card set won. Other Bonus is manual."
+        note="Adults: WC1, WC2 and WC3 may each be used once against each opponent (9 total in a 4-team league). One player may use only one Wild Card in the entire League, and only one Wild Card is allowed in an individual match. Kids: WC1, WC2 and WC3 may each be used only once in the entire League (3 total). Wild Card winner bonus remains +20."
         notify={notify}
       />
 
