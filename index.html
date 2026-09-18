@@ -4467,9 +4467,27 @@ function ScoringTab({ data, update, notify }) {
   const [dutyTyped, setDutyTyped] = useState("");
   const [scorer, setScorer] = useState("");
   const [wcPick, setWcPick] = useState({});
+  const [scrollToMatchId, setScrollToMatchId] = useState("");
+  const [expandedFinished, setExpandedFinished] = useState({});
   // Delayed-entry safety: a referee can leave a fixture as Result Pending and
   // enter all three final set scores later without using point-by-point scoring.
   const [delayedDraft, setDelayedDraft] = useState({});
+
+  useEffect(() => {
+    if (!scrollToMatchId) return;
+    const timer = setTimeout(() => {
+      const el = document.getElementById("scoreboard-" + scrollToMatchId);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+      setScrollToMatchId("");
+    }, 80);
+    return () => clearTimeout(timer);
+  }, [scrollToMatchId, data.matches]);
+
+  const goToScoreboard = (mid) => {
+    setScrollToMatchId(mid);
+    const el = document.getElementById("scoreboard-" + mid);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   const teamById = (id) => data.teams.find((t) => t.id === id);
   const isKidsTeam = (t) => !!t && (String(t.ageGroup || "").toLowerCase() === "kids" || String(t.id || "").startsWith("kids-"));
@@ -4555,6 +4573,7 @@ function ScoringTab({ data, update, notify }) {
       matches: [m, ...d.matches],
       fixtures: (d.fixtures || []).map((x) => (x.id === f.id ? { ...x, matchId: m.id } : x)),
     }));
+    setScrollToMatchId(m.id);
     notify(`${nameOf(f.playerA)} v ${nameOf(f.playerB)} is on the scoreboard.`);
   };
 
@@ -4670,18 +4689,35 @@ function ScoringTab({ data, update, notify }) {
       wildCards: { a: [], b: [] },
     };
     update((d) => ({ ...d, matches: [m, ...d.matches] }));
+    setScrollToMatchId(m.id);
     setPlayerA("");
     setPlayerB("");
   };
 
-  const cardUsedByTeam = (teamId, cardId) =>
-    (data.matches || []).some((m) =>
-      ["a", "b"].some((side) => {
-        const tid = side === "a" ? m.teamA : m.teamB;
-        return String(tid) === String(teamId) &&
-          ((((m.wildCards || {})[side]) || []).some((w) => w.card === cardId));
-      })
-    );
+  // Wild Cards are allocated per team-vs-opponent pairing.
+  // With 4 teams, each team has 3 cards against each of its 3 opponents = 9 total.
+  // WC1/WC2/WC3 may each be used once against the same opponent.
+  const wildCardUsageVsOpponent = (teamId, opponentId) => {
+    const used = new Set();
+    (data.matches || []).forEach((match) => {
+      const aId = resolveMatchTeamId(data, match, "a");
+      const bId = resolveMatchTeamId(data, match, "b");
+      let side = null;
+      if (String(aId) === String(teamId) && String(bId) === String(opponentId)) side = "a";
+      if (String(bId) === String(teamId) && String(aId) === String(opponentId)) side = "b";
+      if (!side) return;
+      (((match.wildCards || {})[side]) || []).forEach((w) => {
+        if (w && w.card) used.add(String(w.card));
+      });
+    });
+    return used;
+  };
+
+  const cardUsedByTeamVsOpponent = (teamId, opponentId, cardId) =>
+    wildCardUsageVsOpponent(teamId, opponentId).has(String(cardId));
+
+  const wildCardCountVsOpponent = (teamId, opponentId) =>
+    wildCardUsageVsOpponent(teamId, opponentId).size;
 
   const wildCardWindowOpen = (m, setIndex) => {
     const s = (m.sets || [])[setIndex] || { a: "0", b: "0" };
@@ -4701,10 +4737,15 @@ function ScoringTab({ data, update, notify }) {
     if (!m || setIndex < 0 || matchResult(m).complete) return false;
     if (!wildCardWindowOpen(m, setIndex)) return false;
 
-    // One Wild Card per team in a set. The other team may still call
-    // its own card before the first rally, even if WC3 has already made it 5-0.
+    // One Wild Card per team in a set. The other team may still call its own card.
     const ownAlready = wildCardsForSet(m, setIndex).some((w) => w.side === side);
-    return !ownAlready;
+    if (ownAlready) return false;
+
+    // Each team has exactly 3 Wild Cards against this opponent (WC1, WC2, WC3).
+    const teamId = resolveMatchTeamId(data, m, side);
+    const opponentSide = side === "a" ? "b" : "a";
+    const opponentId = resolveMatchTeamId(data, m, opponentSide);
+    return wildCardCountVsOpponent(teamId, opponentId) < 3;
   };
 
   const setWcChoice = (mid, side, patch) => {
@@ -4729,9 +4770,16 @@ function ScoringTab({ data, update, notify }) {
       return;
     }
 
-    const teamId = side === "a" ? m.teamA : m.teamB;
-    if (cardUsedByTeam(teamId, choice.card)) {
-      notify(`${choice.card.toUpperCase()} has already been used by this team.`);
+    const teamId = resolveMatchTeamId(data, m, side);
+    const opponentSide = side === "a" ? "b" : "a";
+    const opponentId = resolveMatchTeamId(data, m, opponentSide);
+    const usedVsOpponent = wildCardUsageVsOpponent(teamId, opponentId);
+    if (usedVsOpponent.size >= 3) {
+      notify(`All 3 Wild Cards have already been used against this opponent.`);
+      return;
+    }
+    if (cardUsedByTeamVsOpponent(teamId, opponentId, choice.card)) {
+      notify(`${choice.card.toUpperCase()} has already been used against this opponent.`);
       return;
     }
 
@@ -5043,7 +5091,7 @@ function ScoringTab({ data, update, notify }) {
             <span className={"chip tier-"+Math.min(f.hostTier,5)}>T{f.hostTier}<em>{catLabel(f.category)}</em></span>
             <span className="op-names"><b>{nameOf(f.playerA)}</b><i>v</i><b>{nameOf(f.playerB)}</b></span>
             <span className="muted op-teams">{f.slot||"time not set"} · {done?"Completed":m?.status==="result_pending"?"Result Pending":m?"Live":"Ready"}</span>
-            {!f.matchId ? <div style={{display:"flex",gap:6,flexWrap:"wrap"}}><button className="btn btn-tiny btn-primary" onClick={()=>startFromFixture(f)}>Start Live Scoring</button><button className="btn btn-tiny" onClick={()=>markResultPending(f)}>Enter Result Manually</button></div> : null}
+            {!f.matchId ? <div style={{display:"flex",gap:6,flexWrap:"wrap"}}><button className="btn btn-tiny btn-primary" onClick={()=>startFromFixture(f)}>Start Live Scoring</button><button className="btn btn-tiny" onClick={()=>markResultPending(f)}>Enter Result Manually</button></div> : <button className="btn btn-tiny" onClick={()=>goToScoreboard(f.matchId)}>{done ? "View Finished" : m?.status==="result_pending" ? "Go to Result" : "Go to Live Score"}</button>}
           </li>})}</ul>
         </div>})}</div> : <Empty title="No Official fixtures for this group/date" body="Accept the fixture as Official in Fixtures first."/>}
       </section>
@@ -5159,8 +5207,22 @@ function ScoringTab({ data, update, notify }) {
           const tb = teamById(m.teamB);
           const pa = data.players.find((p) => p.id === m.playerA);
           const pb = data.players.find((p) => p.id === m.playerB);
+          const finishedCollapsed = r.complete && !expandedFinished[m.id];
+          if (finishedCollapsed) {
+            return (
+              <section id={"scoreboard-" + m.id} className="board" key={m.id} style={{background:"#e5e7eb",opacity:.82,border:"1px solid #cbd5e1"}}>
+                <div className="board-top" style={{alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                  <span className="status final">✓ FINISHED</span>
+                  <b style={{flex:"1 1 260px"}}>{pa ? fullName(pa) : "—"} <span className="muted">vs</span> {pb ? fullName(pb) : "—"}</b>
+                  <span className="mono"><b>{r.aSets}–{r.bSets}</b> sets · {r.aPts}–{r.bPts} pts</span>
+                  <button className="btn btn-tiny" onClick={()=>setExpandedFinished(x=>({...x,[m.id]:true}))}>View / Edit</button>
+                  <button className="btn btn-tiny btn-danger" onClick={() => removeMatch(m.id)}>Delete</button>
+                </div>
+              </section>
+            );
+          }
           return (
-            <section className={"board" + (m.status === "live" ? " live" : "")} key={m.id}>
+            <section id={"scoreboard-" + m.id} className={"board" + (m.status === "live" ? " live" : "")} key={m.id}>
               <div className="board-top">
                 <span className={"status " + m.status}>
                   {m.status === "live" ? "Live now" : m.status === "result_pending" ? "⚠ Result Pending" : "Final"}
@@ -5174,6 +5236,7 @@ function ScoringTab({ data, update, notify }) {
                   >
                     {m.status === "live" ? "Mark final" : m.status === "result_pending" ? "Waiting for result" : "Reopen"}
                   </button>
+                  {r.complete ? <button className="btn btn-tiny" onClick={()=>setExpandedFinished(x=>({...x,[m.id]:false}))}>Collapse</button> : null}
                   <button className="btn btn-tiny btn-danger" onClick={() => removeMatch(m.id)}>
                     Delete
                   </button>
@@ -5234,10 +5297,19 @@ function ScoringTab({ data, update, notify }) {
                       const key = m.id + "|" + side;
                       const choice = wcPick[key] || { card:"", detail:"Forehand" };
                       const already = wildCardsForSet(m, active).filter((w) => w.side === side);
+                      const opponentSide = side === "a" ? "b" : "a";
+                      const opponentTid = resolveMatchTeamId(data, m, opponentSide);
+                      const opponentTeam = teamById(opponentTid);
+                      const resolvedTid = resolveMatchTeamId(data, m, side);
+                      const usedVsOpponent = wildCardUsageVsOpponent(resolvedTid, opponentTid);
+                      const usedCount = usedVsOpponent.size;
                       const canCall = canCallWildCard(m, active, side);
                       return (
                         <div className="wc-live-side" key={side}>
                           <strong>{team ? team.name : side.toUpperCase()}</strong>
+                          <div className="muted small" style={{margin:"4px 0 8px"}}>
+                            Wild Cards vs {opponentTeam ? opponentTeam.name : "opponent"}: <b>{usedCount} / 3 used</b> · {Math.max(0,3-usedCount)} remaining
+                          </div>
                           {already.length ? (
                             <span className="wc-active-chip">{already.map(w => w.card.toUpperCase()).join(", ")} ACTIVE</span>
                           ) : (
@@ -5246,8 +5318,8 @@ function ScoringTab({ data, update, notify }) {
                                 onChange={(e)=>setWcChoice(m.id,side,{card:e.target.value})}>
                                 <option value="">Choose Wild Card</option>
                                 {TT_WILD_CARDS.map((w)=>(
-                                  <option key={w.id} value={w.id} disabled={cardUsedByTeam(tid,w.id)}>
-                                    {w.short} — {w.name}{cardUsedByTeam(tid,w.id) ? " — USED" : ""}
+                                  <option key={w.id} value={w.id} disabled={cardUsedByTeamVsOpponent(resolvedTid,opponentTid,w.id)}>
+                                    {w.short} — {w.name}{cardUsedByTeamVsOpponent(resolvedTid,opponentTid,w.id) ? " — USED vs this opponent" : ""}
                                   </option>
                                 ))}
                               </select>
@@ -5371,7 +5443,7 @@ function computeStandings(data, day) {
     setsWon: 0, setsLost: 0, setsPlayed: 0,
     setPoints: 0, matchPoints: 0,
     wc1: null, wc2: null, wc3: null,
-    wcWins: 0, wcLosses: 0, wcBonus: 0, wcLeft: 3,
+    wcWins: 0, wcLosses: 0, wcBonus: 0, wcUsed: 0, wcLeft: 9, wcVs: {},
     manualBonus: 0, points: 0,
   }));
   const byId = {};
@@ -5413,8 +5485,25 @@ function computeStandings(data, day) {
     });
   });
 
+  // Wild Card allowance ledger: 3 cards against each opponent, 9 total for a 4-team league.
+  // Count declarations from all saved matches (including a currently live match). Deleting a match
+  // automatically restores the allowance because this ledger is derived, never manually stored.
   table.forEach((t) => {
-    t.wcLeft = Math.max(0, 3 - [t.wc1,t.wc2,t.wc3].filter(Boolean).length);
+    const vs = {};
+    (data.teams || []).filter(o => String(o.id) !== String(t.id)).forEach(o => { vs[o.id] = new Set(); });
+    (data.matches || []).forEach((m) => {
+      const aId = resolveMatchTeamId(data, m, "a");
+      const bId = resolveMatchTeamId(data, m, "b");
+      let side = null, opp = null;
+      if (String(aId) === String(t.id)) { side = "a"; opp = bId; }
+      else if (String(bId) === String(t.id)) { side = "b"; opp = aId; }
+      if (!side || opp == null) return;
+      if (!vs[opp]) vs[opp] = new Set();
+      (((m.wildCards || {})[side]) || []).forEach(w => { if (w && w.card) vs[opp].add(String(w.card)); });
+    });
+    t.wcVs = Object.fromEntries(Object.entries(vs).map(([k,v]) => [k, v.size]));
+    t.wcUsed = Object.values(t.wcVs).reduce((sum,n) => sum + Number(n || 0), 0);
+    t.wcLeft = Math.max(0, 9 - t.wcUsed);
     t.manualBonus = wholeRun ? Number((data.bonuses || {})[t.id]) || 0 : 0;
     t.points = t.setPoints + t.matchPoints + t.wcBonus + t.manualBonus;
   });
@@ -5478,7 +5567,7 @@ function StandingsTab({ data, update, notify }) {
   const columns = [
     "Rank","Team","Matches","Sets W-L","Set Points",
     "Match Wins","Match Losses","Match Points (25 each)",
-    "Wild Cards","Wild Card Bonus","Other Bonus","Total Points",
+    "Wild Cards Used","Wild Card Bonus","Other Bonus","Total Points",
   ];
   const wcText = (w) => !w ? "Left" : w.won === true ? "Used · Won" : w.won === false ? "Used · Lost" : "Active";
   const rows = table.map((t, i) => {
@@ -5490,7 +5579,7 @@ function StandingsTab({ data, update, notify }) {
     return [
       i + 1, t.name, t.played, `${t.setsWon}-${t.setsLost}`, t.setPoints,
       t.matchWins, t.matchLosses, t.matchPoints,
-      cardMini,
+      `${t.wcUsed} / 9`,
       t.wcBonus, t.manualBonus || "", t.points,
     ];
   });
@@ -5510,27 +5599,13 @@ function StandingsTab({ data, update, notify }) {
   };
 
   const wcRemainingCards = (t) => {
-    const count = Math.max(0, t.wcLeft);
+    const opponents = (data.teams || []).filter(o => String(o.id) !== String(t.id));
+    const details = opponents.map(o => `${o.name}: ${Number((t.wcVs || {})[o.id] || 0)} / 3`).join(" · ");
     return (
-      <div className="wc-visual-wrap">
-        <div className="wc-visual-cards" title={`${count} Wild Card${count === 1 ? "" : "s"} left`}>
-          {Array.from({length: count}).map((_,i) => (
-            <span className="wc-playing-card" key={i}>★</span>
-          ))}
-          
-        </div>
-        {3 - count > 0 ? (
-          <button
-            type="button"
-            className="wc-used-link"
-            onClick={() => notify(wcUsedDetails(t))}
-            title="Click to see which Wild Card was used"
-          >
-            ⓘ
-          </button>
-        ) : (
-          <span className="wc-unused-note">0 used</span>
-        )}
+      <div className="wc-visual-wrap" title={details || "Wild Card usage"}>
+        <button type="button" className="wc-used-link" onClick={() => notify(details || "No Wild Card used yet.")}>
+          <b>{t.wcUsed} / 9 used</b> · {t.wcLeft} left ⓘ
+        </button>
       </div>
     );
   };
@@ -5618,7 +5693,7 @@ function StandingsTab({ data, update, notify }) {
         columns={columns}
         rows={rows}
         onImport={onImport}
-        note="Set Pts and Match Pts come from played matches. Wild Card Bonus is automatic: +20 for every Wild Card whose set is won. This +20 appears in Bonus and is included in Total. Other Bonus is manual."
+        note="Set Pts and Match Pts come from played matches. Each team has 3 Wild Cards against each opponent (9 total in a 4-team league). Wild Card Bonus remains automatic: +20 for every Wild Card set won. Other Bonus is manual."
         notify={notify}
       />
 
@@ -5655,13 +5730,7 @@ function StandingsTab({ data, update, notify }) {
                     <th title="Matches won">Match W</th>
                     <th title="Matches lost">Match L</th>
                     <th title="25 points for every match won">Match pts</th>
-                    <th title="Each team starts with 3 Wild Cards"><span className="wc-head">Wild Cards
-      <span className="wc-head-deck" aria-label="3 Wild Cards">
-        <span className="wc-playing-card">★</span>
-        <span className="wc-playing-card">★</span>
-        <span className="wc-playing-card">★</span>
-      </span>
-    </span></th>
+                    <th title="3 Wild Cards against each of 3 opponents = 9 total"><span className="wc-head">Wild Cards <span className="muted small">(used / 9)</span></span></th>
                     <th title="20 points for each successful Wild Card">Bonus</th>
                     <th>Other Bonus</th>
                     <th>Total</th>
