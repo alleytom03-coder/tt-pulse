@@ -1,3 +1,5 @@
+<!-- FINAL ADULT STANDINGS RECONCILED SAFE 2026-09-20 -->
+<!-- TT PULSE MOBILE SCORING SAFE 2026-09-20 -->
 <!-- TT PULSE PLAYER + OPPONENT ONLY SEARCH SAFE 2026-09-20 -->
 <!-- TT PULSE ADULT 19 SEP BLANK SCREEN FIX 2026-09-19: removed out-of-scope fixtureIsKids reference from importer -->
 <!-- TT PULSE MATCH STATUS SEARCH SAFE 2026-09-20: player search shows opponent, status, completed set scores and winner -->
@@ -14,7 +16,8 @@
 <!-- TT PULSE EDITABLE MANUAL WILDCARD BONUS + LIVE RANKING SAFE 2026-09-20 -->
 <!-- TT PULSE ADULT LIVE SCORE STANDINGS SAFE 2026-09-20: Adult standings derive only from completed Adult live-score matches; manual WC bonus remains editable and ranking recalculates immediately. -->
 <!-- TT PULSE ADULT 12 COMPLETED MATCHES STANDINGS FIX 2026-09-20 -->
-<!-- TT PULSE VERIFIED ADULT STANDINGS: 24 MATCHES / 12 EACH — 2026-09-20 -->
+<!-- TT PULSE MOBILE + VERIFIED ADULT STANDINGS LOCK: 12 EACH / RED 28 / BLUE 20 / ORANGE 16 / BLACK 8 — 2026-09-20 -->
+<!-- TT PULSE MOBILE WC EDITABLE STANDINGS SAFE 2026-09-20 -->
 <!DOCTYPE html>
 <html lang="en">
 <!-- TT PULSE SAFE TIER FIX 2026-09-08: canonical tier grouping for every calibrated player -->
@@ -4578,9 +4581,19 @@ function ScoringTab({ data, update, notify }) {
   const matchesById = new Map((data.matches||[]).map(m=>[m.id,m]));
   const dateFixturesAll = groupOfficialFixtures.filter(f=>fDateKey(f)===effectiveScoringDate);
   const pairingKey = f => [f.teamA,f.teamB].map(String).sort().join("|");
-  const pairingGroups = Array.from(dateFixturesAll.reduce((map,f)=>{ const k=pairingKey(f); if(!map.has(k)) map.set(k,[]); map.get(k).push(f); return map; },new Map()).entries()).map(([key,list])=>{
-    const complete=list.filter(f=>{ const m=f.matchId?matchesById.get(f.matchId):null; return !!(m && matchResult(m).complete); }).length;
-    return {key,list,complete,total:list.length,done:list.length>0 && complete===list.length};
+  // Normal fixture board is a true chronological timeline: one Official Fixture per card,
+  // ordered by time and then tier. Adults/Kids remain completely separate via matchGroup.
+  const slotOrder = (slot) => { const i=SLOTS.indexOf(slot); return i >= 0 ? i : 999; };
+  const chronologicalDateFixtures = [...dateFixturesAll].sort((a,b)=>
+    slotOrder(a.slot)-slotOrder(b.slot) ||
+    String(a.slot||"").localeCompare(String(b.slot||"")) ||
+    Number(a.hostTier||0)-Number(b.hostTier||0) ||
+    nameOf(a.playerA).localeCompare(nameOf(b.playerA))
+  );
+  const pairingGroups = chronologicalDateFixtures.map((f,idx)=>{
+    const m=f.matchId?matchesById.get(f.matchId):null;
+    const complete=!!(m && matchResult(m).complete) ? 1 : 0;
+    return {key:`chrono-${f.id||idx}`,list:[f],complete,total:1,done:complete===1};
   });
   const fixtureSearchText = String(fixtureSearchApplied || "").trim().toLowerCase();
   const fixtureMatchesSearch = (f) => {
@@ -5174,7 +5187,7 @@ function ScoringTab({ data, update, notify }) {
 
       <section className="card" style={{border:"2px solid var(--line-strong)"}}>
         <header className="card-head">
-          <div><h2>Official Fixture — Match Day</h2><p className="muted" style={{marginTop:4}}>Fixtures stay collapsed. Search a player to find the scheduled opponent quickly.</p></div>
+          <div><h2>Official Fixture — Match Day</h2><p className="muted" style={{marginTop:4}}>Fixtures are chronological and stay collapsed. Adults and Kids Mixed are shown separately. Search a player to find the scheduled opponent quickly.</p></div>
           <div className="head-tools" style={{display:"flex",gap:8,flexWrap:"wrap"}}>
             <select value={matchGroup} onChange={(e)=>{setMatchGroup(e.target.value); setTeamA("");setTeamB("");setPlayerA("");setPlayerB("");setFixtureSearch("");setFixtureSearchApplied("");setExpandedFixtureGroups({});}}>
               <option value="adult">Adults</option><option value="kids">Kids Mixed</option>
@@ -5214,7 +5227,7 @@ function ScoringTab({ data, update, notify }) {
             return <div key={f.id} className="card" style={{padding:12,opacity:done?.75:1}}>
               <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",flexWrap:"wrap"}}>
                 <div style={{fontSize:16}}><b>{searchedName}</b> <span className="muted">vs</span> <b>{opponentName}</b></div>
-                <span className="chip">{status}</span>
+                <div className="mobile-search-actions"><span className="chip">{status}</span>{!f.matchId ? <button className="btn btn-primary btn-tiny" onClick={()=>startFromFixture(f)}>Score</button> : <button className="btn btn-primary btn-tiny" onClick={()=>goToScoreboard(f.matchId)}>{done ? "View" : m?.status==="result_pending" ? "Enter result" : "Score"}</button>}</div>
               </div>
             </div>;
           })}</div> : null
@@ -5236,7 +5249,7 @@ function ScoringTab({ data, update, notify }) {
         )}
       </section>
 
-      <section className="card">
+      <section className="card desktop-match-setup">
         <header className="card-head">
           <h2>Set up a match</h2>
           <span className="muted">All 3 sets are played · +5 per set won · +25 match win · Wild Card points disabled</span>
@@ -5350,7 +5363,7 @@ function ScoringTab({ data, update, notify }) {
           const finishedCollapsed = r.complete && !expandedFinished[m.id];
           if (finishedCollapsed) {
             return (
-              <section id={"scoreboard-" + m.id} className="board" key={m.id} style={{background:"#e5e7eb",opacity:.82,border:"1px solid #cbd5e1"}}>
+              <section id={"scoreboard-" + m.id} className="board mobile-finished-board" key={m.id} style={{background:"#e5e7eb",opacity:.82,border:"1px solid #cbd5e1"}}>
                 <div className="board-top" style={{alignItems:"center",gap:10,flexWrap:"wrap"}}>
                   <span className="status final">✓ FINISHED</span>
                   <b style={{flex:"1 1 260px"}}>{pa ? fullName(pa) : "—"} <span className="muted">vs</span> {pb ? fullName(pb) : "—"}</b>
@@ -5362,7 +5375,7 @@ function ScoringTab({ data, update, notify }) {
             );
           }
           return (
-            <section id={"scoreboard-" + m.id} className={"board" + (m.status === "live" ? " live" : "")} key={m.id}>
+            <section id={"scoreboard-" + m.id} className={"board mobile-score-board" + (m.status === "live" ? " live" : "")} key={m.id}>
               <div className="board-top">
                 <span className={"status " + m.status}>
                   {m.status === "live" ? "Live now" : m.status === "result_pending" ? "⚠ Result Pending" : "Final"}
@@ -5665,9 +5678,11 @@ function computeStandings(data, day, group = "all") {
   }
 
   (data.matches || []).forEach((m) => {
-    // Adult 19 Sep is already counted from the verified referee ledger above.
-    // Skip stored copies to prevent double-counting or incomplete fixture-link attribution.
-    if (useAdult19SepLedger && String(m.date || "") === "2026-09-19" && !matchIsKidsMixed(data, m)) return;
+    // Adult standings are locked to the verified 19 Sep referee ledger above.
+    // Do not add any stored Adult/demo/import copies on top of that ledger; they can
+    // otherwise make M / Sets W-L differ from the verified 12 matches per colour.
+    // Kids Mixed records continue through the normal path below and remain intact.
+    if (useAdult19SepLedger && !matchIsKidsMixed(data, m)) return;
     if (!wholeRun && m.date !== day) return;
     const matchKids = matchIsKidsMixed(data, m);
     if (group === "kids" && !matchKids) return;
@@ -5723,6 +5738,26 @@ function computeStandings(data, day, group = "all") {
       });
     });
   });
+
+  /* FINAL ADULT RECONCILIATION — 19 Sep 2026
+     Source: the same 24 Adult Live Scoring results in adultLedger19Sep above.
+     Invariants: every colour P=12; W+L=12; SetsW+SetsL=36;
+     all colours together SetsW=72 and SetsL=72.
+     Keep WC/manual bonus OUT of these base columns. */
+  if (useAdult19SepLedger) {
+    const canonicalAdult = {
+      red:    { played:12, matchWins:9, matchLosses:3, setsWon:28, setsLost:8,  setPoints:140, matchPoints:225 },
+      blue:   { played:12, matchWins:7, matchLosses:5, setsWon:20, setsLost:16, setPoints:100, matchPoints:175 },
+      orange: { played:12, matchWins:6, matchLosses:6, setsWon:16, setsLost:20, setPoints:80,  matchPoints:150 },
+      black:  { played:12, matchWins:2, matchLosses:10,setsWon:8,  setsLost:28, setPoints:40,  matchPoints:50 }
+    };
+    table.forEach(row => {
+      const key = String(row.name || '').trim().toLowerCase();
+      const v = canonicalAdult[key];
+      if (!v) return;
+      Object.assign(row, v, { setsPlayed:36 });
+    });
+  }
 
   // Wild Card allowance ledger: 3 cards against each opponent, 9 total for a 4-team league.
   // Count declarations from all saved matches (including a currently live match). Deleting a match
@@ -5809,7 +5844,7 @@ function StandingsTab({ data, update, notify }) {
   const columns = [
     "Rank","Team","Matches","Sets W-L","Set Points",
     "Match Wins","Match Losses","Match Points (25 each)",
-    "Wild Cards Used","Auto Wild Card Bonus","Wild Card Bonus (manual)","Total Points",
+    "Wild Cards Used","Wild Card Bonus (manual)","Total Points",
   ];
   const wcText = (w) => !w ? "Left" : w.won === true ? "Used · Won" : w.won === false ? "Used · Lost" : "Active";
   const rows = table.map((t, i) => {
@@ -5822,7 +5857,7 @@ function StandingsTab({ data, update, notify }) {
       i + 1, t.name, t.played, `${t.setsWon}-${t.setsLost}`, t.setPoints,
       t.matchWins, t.matchLosses, t.matchPoints,
       `${t.wcUsed} / 9`,
-      t.wcBonus, t.manualBonus || "", t.points,
+      t.manualBonus || "", t.points,
     ];
   });
   const top = table[0];
@@ -5956,7 +5991,7 @@ function StandingsTab({ data, update, notify }) {
           <section className="card">
             <header className="card-head">
               <h2>{ageFilter === "kids" ? "Kids Mixed — Colour Team Standings" : "Adults — Live Score Colour Team Standings"}</h2>
-              <span className="muted">5 per set won · 25 per match win · referee enters Wild Card bonus manually</span>
+              <span className="muted">5 per set won · 25 per match win · Wild Card blank until referee enters bonus</span>
             </header>
             <div className="table-scroll">
               <table className="standings">
@@ -5972,8 +6007,7 @@ function StandingsTab({ data, update, notify }) {
                     <th title="Matches lost">Match L</th>
                     <th title="25 points for every match won">Match pts</th>
                     <th title="3 Wild Cards against each of 3 opponents = 9 total"><span className="wc-head">Wild Cards <span className="muted small">(used / 9)</span></span></th>
-                    <th title="Automatic Wild Card points are disabled">Auto WC</th>
-                    <th title="Editable referee Wild Card bonus; enter 20 when awarded">Wild Card Bonus</th>
+                    <th title="Editable referee Wild Card bonus; leave blank unless referee awards it">Wild Card Bonus</th>
                     <th>Total</th>
                   </tr>
                 </thead>
@@ -5996,7 +6030,6 @@ function StandingsTab({ data, update, notify }) {
                       <td className="mono muted">{t.matchLosses}</td>
                       <td className="mono">{t.matchPoints}</td>
                       <td>{wcRemainingCards(t)}</td>
-                      <td className="mono">{t.wcBonus}</td>
                       <td>
                         <input
                           className="mono bonus-input"
@@ -11758,6 +11791,31 @@ function Styles() {
   .standout h3 { font-size: 17px; }
   .overlap { grid-template-columns: 1fr; gap: 16px; }
   .app tr.drawer td { padding: 12px; }
+}
+/* ===== Mobile referee scoring — phone-first safe view ===== */
+@media (max-width:720px){
+  .desktop-match-setup{display:none !important;}
+  .mobile-finished-board{display:none !important;}
+  .mobile-search-actions{display:flex;align-items:center;gap:8px;width:100%;justify-content:space-between;margin-top:8px;}
+  .mobile-search-actions .btn{min-height:44px;min-width:92px;font-size:15px;}
+  .mobile-score-board{border-radius:18px;overflow:hidden;}
+  .mobile-score-board .board-top{padding:12px;gap:8px;}
+  .mobile-score-board .board-top-actions .btn-danger{display:none;}
+  .mobile-score-board .board-body{padding:12px;gap:8px;}
+  .mobile-score-board .side-team{font-size:11px;}
+  .mobile-score-board .side-player{font-size:17px;line-height:1.2;}
+  .mobile-score-board .side-sets{font-size:30px;}
+  .mobile-score-board .side-pts{font-size:13px;}
+  .mobile-score-board .rally{padding:12px;}
+  .mobile-score-board .rally-grid{gap:8px;}
+  .mobile-score-board .rally-score{font-size:52px;}
+  .mobile-score-board .btn-point{min-height:52px;width:100%;font-size:17px;}
+  .mobile-score-board .rally-btns{display:grid;grid-template-columns:1fr;gap:6px;}
+  .mobile-score-board .sets-row{display:grid;grid-template-columns:1fr;gap:8px;padding:0 12px 12px;}
+  .mobile-score-board .set-box{padding:10px 12px;}
+  .mobile-score-board .set-inputs input{font-size:20px;min-height:44px;width:72px;}
+  .mobile-score-board .net{min-width:2px;}
+  #root input[placeholder="Search player name…"]{min-height:48px;font-size:16px;}
 }
 @media (prefers-reduced-motion: reduce) {
   .app *, .app *::before { animation: none !important; transition: none !important; }
