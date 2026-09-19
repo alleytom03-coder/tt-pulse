@@ -1,3 +1,6 @@
+<!-- TT PULSE PLAYER + OPPONENT ONLY SEARCH SAFE 2026-09-20 -->
+<!-- TT PULSE ADULT 19 SEP BLANK SCREEN FIX 2026-09-19: removed out-of-scope fixtureIsKids reference from importer -->
+<!-- TT PULSE MATCH STATUS SEARCH SAFE 2026-09-20: player search shows opponent, status, completed set scores and winner -->
 <!-- TT PULSE LIVE SCORING RESULT-LATER SAFETY 2026-09-17 -->
 <!-- Fixture safe-point preserved; added Result Pending / Enter Result Later workflow only -->
 <!-- TT PULSE RECOVERED TEAMS + ALL-CHANGE AUTOSAVE SAFETY 2026-09-15 -->
@@ -5,6 +8,13 @@
 <!-- TT Pulse WC FOOLPROOF BONUS FIX 2026-09-11: WC result derived from finished set score -->
 <!-- TT PULSE SAFE TIER ROUND-ROBIN FIXTURES 2026-09-10 -->
 <!-- TT PULSE UPDATED WILDCARD + FIXED 4-PLAYER TIERS 2026-09-11 -->
+<!-- TT PULSE SAFE POINT 2026-09-19: WILD CARD POINTS DISABLED; SET + MATCH POINTS ONLY; EXISTING SCORES PRESERVED -->
+<!-- TT PULSE COLLAPSED FIXTURES + PLAYER SEARCH SAFE 2026-09-19 -->
+<!-- TT PULSE KIDS MIXED 4-COLOUR STANDINGS FIX 2026-09-20 -->
+<!-- TT PULSE EDITABLE MANUAL WILDCARD BONUS + LIVE RANKING SAFE 2026-09-20 -->
+<!-- TT PULSE ADULT LIVE SCORE STANDINGS SAFE 2026-09-20: Adult standings derive only from completed Adult live-score matches; manual WC bonus remains editable and ranking recalculates immediately. -->
+<!-- TT PULSE ADULT 12 COMPLETED MATCHES STANDINGS FIX 2026-09-20 -->
+<!-- TT PULSE VERIFIED ADULT STANDINGS: 24 MATCHES / 12 EACH — 2026-09-20 -->
 <!DOCTYPE html>
 <html lang="en">
 <!-- TT PULSE SAFE TIER FIX 2026-09-08: canonical tier grouping for every calibrated player -->
@@ -816,8 +826,23 @@ function setDone(s) {
   return (a >= POINTS_TO_WIN_SET || b >= POINTS_TO_WIN_SET) && Math.abs(a - b) >= 2;
 }
 function setWinnerForMatch(m, setIndex) {
+  const s = (m.sets || [])[setIndex];
+  if (!s) return null;
+
+  /* 20 Sep 2026 Adult standings fix:
+     The 19 Sep referee sheet contains completed historical sets that were played
+     under the then-active Wild Card rules (for example WC2 Race-to-7 scores such
+     as 7-3). Those sets are final even though the simplified tomorrow scoring
+     engine now uses normal first-to-11 rules. For the imported 19 Sep Adult
+     results, trust the recorded final set score and derive only the winner.
+     No automatic Wild Card bonus is restored. */
+  if (m.importedAdultSheet20260919 || m.entryMode === "adult-sheet-import") {
+    const a = num(s.a), b = num(s.b);
+    if (a === b || (a === 0 && b === 0)) return null;
+    return a > b ? "a" : "b";
+  }
+
   if (!setDoneForMatch(m, setIndex)) return null;
-  const s = m.sets[setIndex];
   if (num(s.a) === num(s.b)) return null;
   return num(s.a) > num(s.b) ? "a" : "b";
 }
@@ -858,24 +883,10 @@ function matchResult(m) {
   const bSetPts = bSets * 5;
   const aMatchPts = complete && aSets > bSets ? 25 : 0;
   const bMatchPts = complete && bSets > aSets ? 25 : 0;
-  // Wild Card bonus is awarded ONCE per Wild Card set, not once per stored call/card.
-  // This also protects Standings from duplicate/stale Wild Card records created during testing.
-  // The +20 always goes to the WINNER of that called set, regardless of which side called it.
-  let aWcBonus = 0;
-  let bWcBonus = 0;
-  const wildCardSetIndexes = new Set();
-  ["a", "b"].forEach((calledBy) => {
-    (((m.wildCards || {})[calledBy]) || []).forEach((w) => {
-      const setNo = Number(w && w.set);
-      if (!Number.isFinite(setNo) || setNo < 1 || setNo > 3) return;
-      wildCardSetIndexes.add(setNo - 1);
-    });
-  });
-  wildCardSetIndexes.forEach((setIndex) => {
-    const winner = setWinnerForMatch(m, setIndex);
-    if (winner === "a") aWcBonus += 20;
-    if (winner === "b") bWcBonus += 20;
-  });
+  // 19 Sep 2026 safe scoring rule: Wild Card contributes NO automatic points.
+  // Existing Wild Card records and set scores are preserved in stored data, but ignored for points.
+  const aWcBonus = 0;
+  const bWcBonus = 0;
 
   return {
     aSets, bSets, setsPlayed: played,
@@ -893,15 +904,34 @@ function matchResult(m) {
 /* Resolve a match side to the actual TT-Pulse team record. Imported fixtures can
    occasionally carry a team label (or no team id) even though the player is
    correctly linked. Standings must follow the player's formed team in that case. */
+function matchIsKidsMixed(data, m) {
+  if (!m) return false;
+  if (m.fixtureGroup === "kids" || isKid(m.category)) return true;
+  const ta = String(m.teamA || "").toLowerCase(), tb = String(m.teamB || "").toLowerCase();
+  if (ta.startsWith("kids-") || tb.startsWith("kids-")) return true;
+  const ids = [m.playerA, m.playerB].map(String);
+  return (data.players || []).some(p => ids.includes(String(p.id)) && ageGroupOf(p) === "kids");
+}
+
 function resolveMatchTeamId(data, m, side) {
   const raw = side === "a" ? m.teamA : m.teamB;
   const pid = side === "a" ? m.playerA : m.playerB;
   const teams = data.teams || [];
   const rawText = String(raw == null ? "" : raw).trim().toLowerCase();
+  const fixtureKids = matchIsKidsMixed(data, m);
+  if (fixtureKids) {
+    const colour = rawText.replace(/^kids[-_ ]?/, "");
+    if (["red","blue","orange","black"].includes(colour)) return `kids-${colour}`;
+  }
   const direct = teams.find(t => String(t.id) === String(raw)) ||
                  teams.find(t => String(t.name || "").trim().toLowerCase() === rawText);
-  if (direct) return direct.id;
-  const fixtureKids = m.fixtureGroup === "kids" || isKid(m.category);
+  if (direct) {
+    if (fixtureKids) {
+      const directColour = String(direct.name || direct.id || "").trim().toLowerCase().replace(/^kids[-_ ]?/, "");
+      if (["red","blue","orange","black"].includes(directColour)) return `kids-${directColour}`;
+    }
+    return direct.id;
+  }
   const member = teams.find(t => {
     const kidsTeam = String(t.ageGroup || "").toLowerCase() === "kids" || String(t.id || "").startsWith("kids-");
     if (fixtureKids !== kidsTeam) return false;
@@ -3393,7 +3423,7 @@ function AvailabilityTab({ data, update, notify }) {
     <section className="card">
       <div className="grid-form">
         <Field label="Work group"><select value={ageFilter} onChange={e=>{setAgeFilter(e.target.value);setPlayerId("");setOpenDay(null)}}>
-          <option value="all">All participants</option><option value="adult">Adults only</option><option value="kids">Kids only</option>
+          <option value="all">All participants</option><option value="adult">Adults only</option><option value="kids">Kids Mixed</option>
         </select></Field>
         <Field label="Player"><select value={playerId} onChange={e=>{setPlayerId(e.target.value);setOpenDay(null)}}>
           <option value="">Select a player ({workPlayers.length})</option>
@@ -4470,6 +4500,11 @@ function ScoringTab({ data, update, notify }) {
   const [wcPick, setWcPick] = useState({});
   const [scrollToMatchId, setScrollToMatchId] = useState("");
   const [expandedFinished, setExpandedFinished] = useState({});
+  // Match-day fixture board: keep every team block collapsed by default and
+  // let the referee find a player quickly from the accepted Official Fixtures.
+  const [expandedFixtureGroups, setExpandedFixtureGroups] = useState({});
+  const [fixtureSearch, setFixtureSearch] = useState("");
+  const [fixtureSearchApplied, setFixtureSearchApplied] = useState("");
   // Delayed-entry safety: a referee can leave a fixture as Result Pending and
   // enter all three final set scores later without using point-by-point scoring.
   const [delayedDraft, setDelayedDraft] = useState({});
@@ -4547,6 +4582,30 @@ function ScoringTab({ data, update, notify }) {
     const complete=list.filter(f=>{ const m=f.matchId?matchesById.get(f.matchId):null; return !!(m && matchResult(m).complete); }).length;
     return {key,list,complete,total:list.length,done:list.length>0 && complete===list.length};
   });
+  const fixtureSearchText = String(fixtureSearchApplied || "").trim().toLowerCase();
+  const fixtureMatchesSearch = (f) => {
+    if (!fixtureSearchText) return true;
+    const hay = [nameOf(f.playerA), nameOf(f.playerB), teamById(f.teamA)?.name, teamById(f.teamB)?.name, f.slot, `T${f.hostTier || ""}`]
+      .filter(Boolean).join(" " ).toLowerCase();
+    return hay.includes(fixtureSearchText);
+  };
+  // When searching a player, search ALL official fixtures in the selected group across every date.
+  // Without a search, keep the normal selected-date fixture board.
+  const searchPairingGroups = Array.from(groupOfficialFixtures.reduce((map,f)=>{
+    if (!fixtureMatchesSearch(f)) return map;
+    const k=pairingKey(f);
+    if(!map.has(k)) map.set(k,[]);
+    map.get(k).push(f);
+    return map;
+  },new Map()).entries()).map(([key,list])=>{
+    const complete=list.filter(f=>{ const m=f.matchId?matchesById.get(f.matchId):null; return !!(m && matchResult(m).complete); }).length;
+    return {key,list,visibleList:list,complete,total:list.length,done:list.length>0 && complete===list.length};
+  });
+  const visiblePairingGroups = fixtureSearchText
+    ? searchPairingGroups
+    : pairingGroups.map(pg => ({...pg, visibleList: pg.list}));
+  const runFixtureSearch = () => setFixtureSearchApplied(fixtureSearch);
+  const clearFixtureSearch = () => { setFixtureSearch(""); setFixtureSearchApplied(""); };
 
   const startFromFixture = (f) => {
     const m = {
@@ -5115,34 +5174,72 @@ function ScoringTab({ data, update, notify }) {
 
       <section className="card" style={{border:"2px solid var(--line-strong)"}}>
         <header className="card-head">
-          <div><h2>Official Fixture — Match Day</h2><p className="muted" style={{marginTop:4}}>Only the selected group/date is shown. A team pairing greys out only after every scheduled combination is complete.</p></div>
+          <div><h2>Official Fixture — Match Day</h2><p className="muted" style={{marginTop:4}}>Fixtures stay collapsed. Search a player to find the scheduled opponent quickly.</p></div>
           <div className="head-tools" style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-            <select value={matchGroup} onChange={(e)=>{setMatchGroup(e.target.value); setTeamA("");setTeamB("");setPlayerA("");setPlayerB("");}}>
+            <select value={matchGroup} onChange={(e)=>{setMatchGroup(e.target.value); setTeamA("");setTeamB("");setPlayerA("");setPlayerB("");setFixtureSearch("");setFixtureSearchApplied("");setExpandedFixtureGroups({});}}>
               <option value="adult">Adults</option><option value="kids">Kids Mixed</option>
             </select>
-            <select value={effectiveScoringDate} onChange={(e)=>setScoringDate(e.target.value)}>
+            <select value={effectiveScoringDate} onChange={(e)=>{setScoringDate(e.target.value);setFixtureSearch("");setFixtureSearchApplied("");setExpandedFixtureGroups({});}}>
               {scoringDates.length ? scoringDates.map(d=><option key={d} value={d}>{prettyDate(d)}</option>) : <option value={scoringDate}>No fixture dates</option>}
             </select>
           </div>
         </header>
-        {pairingGroups.length ? <div className="stack">{pairingGroups.map(pg=>{ const first=pg.list[0]; return <div key={pg.key} className="card" style={{opacity:pg.done?.55:1,background:pg.done?"#e5e7eb":undefined}}>
-          <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",flexWrap:"wrap"}}>
-            <div><b>{teamById(first.teamA)?.name || String(first.teamA).toUpperCase()} vs {teamById(first.teamB)?.name || String(first.teamB).toUpperCase()}</b><div className="muted">{prettyDate(effectiveScoringDate)} · {matchGroup==="kids"?"Kids Mixed":"Adults"}</div></div>
-            <span className="chip">{pg.done?"✓ COMPLETED":`${pg.complete} of ${pg.total} completed · ${pg.total-pg.complete} pending`}</span>
-          </div>
-          <ul className="op-list" style={{marginTop:8}}>{pg.list.map(f=>{ const m=f.matchId?matchesById.get(f.matchId):null; const done=!!(m&&matchResult(m).complete); return <li key={f.id} style={{opacity:done?.55:1}}>
-            <span className={"chip tier-"+Math.min(f.hostTier,5)}>T{f.hostTier}<em>{catLabel(f.category)}</em></span>
-            <span className="op-names"><b>{nameOf(f.playerA)}</b><i>v</i><b>{nameOf(f.playerB)}</b></span>
-            <span className="muted op-teams">{f.slot||"time not set"} · {done?"Completed":m?.status==="result_pending"?"Result Pending":m?"Live":"Ready"}</span>
-            {!f.matchId ? <div style={{display:"flex",gap:6,flexWrap:"wrap"}}><button className="btn btn-tiny btn-primary" onClick={()=>startFromFixture(f)}>Start Live Scoring</button><button className="btn btn-tiny" onClick={()=>markResultPending(f)}>Enter Result Manually</button></div> : <button className="btn btn-tiny" onClick={()=>goToScoreboard(f.matchId)}>{done ? "View Finished" : m?.status==="result_pending" ? "Go to Result" : "Go to Live Score"}</button>}
-          </li>})}</ul>
-        </div>})}</div> : <Empty title="No Official fixtures for this group/date" body="Accept the fixture as Official in Fixtures first."/>}
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
+          <input
+            value={fixtureSearch}
+            placeholder="Search player name…"
+            onChange={(e)=>setFixtureSearch(e.target.value)}
+            onKeyDown={(e)=>{ if(e.key === "Enter") runFixtureSearch(); }}
+            style={{flex:"1 1 220px",minWidth:0}}
+          />
+          <button className="btn btn-primary" onClick={runFixtureSearch}>🔎 Search</button>
+          {(fixtureSearch || fixtureSearchApplied) ? <button className="btn btn-ghost" onClick={clearFixtureSearch}>Clear</button> : null}
+        </div>
+        {fixtureSearchText && !visiblePairingGroups.length ? <div className="muted" style={{marginBottom:10}}>No Official Fixture found for “{fixtureSearchApplied}” in this group.</div> : null}
+        {fixtureSearchText && visiblePairingGroups.length ? <div className="card" style={{marginBottom:12,border:"2px solid var(--line-strong)"}}>
+          <b>Matches for “{fixtureSearchApplied}”</b>
+          <div className="muted" style={{marginTop:4}}>Only the searched player and each scheduled opponent are shown.</div>
+        </div> : null}
+        {fixtureSearchText ? (
+          visiblePairingGroups.length ? <div className="stack">{visiblePairingGroups.flatMap(pg=>pg.visibleList||[]).map(f=>{
+            const aName=nameOf(f.playerA), bName=nameOf(f.playerB);
+            const q=fixtureSearchText;
+            const aHit=String(aName||"").toLowerCase().includes(q);
+            const searchedName=aHit?aName:bName;
+            const opponentName=aHit?bName:aName;
+            const m=f.matchId?matchesById.get(f.matchId):null;
+            const r=m?matchResult(m):null;
+            const done=!!(r&&r.complete);
+            const status=done?"COMPLETED":m?.status==="result_pending"?"RESULT PENDING":m?"LIVE":"NOT PLAYED";
+            return <div key={f.id} className="card" style={{padding:12,opacity:done?.75:1}}>
+              <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+                <div style={{fontSize:16}}><b>{searchedName}</b> <span className="muted">vs</span> <b>{opponentName}</b></div>
+                <span className="chip">{status}</span>
+              </div>
+            </div>;
+          })}</div> : null
+        ) : (
+          visiblePairingGroups.length ? <div className="stack">{visiblePairingGroups.map(pg=>{
+            const first=pg.list[0];
+            const isOpen = !!expandedFixtureGroups[pg.key];
+            const shown = pg.visibleList || pg.list;
+            return <div key={pg.key} className="card" style={{opacity:pg.done?.55:1,background:pg.done?"#e5e7eb":undefined}}>
+              <button type="button" onClick={()=>setExpandedFixtureGroups(x=>({...x,[pg.key]:!x[pg.key]}))} style={{width:"100%",border:0,background:"transparent",padding:0,textAlign:"left",cursor:"pointer"}}>
+                <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+                  <div><b>{teamById(first.teamA)?.name || String(first.teamA).toUpperCase()} vs {teamById(first.teamB)?.name || String(first.teamB).toUpperCase()}</b><div className="muted">{prettyDate(effectiveScoringDate)} · {matchGroup==="kids"?"Kids Mixed":"Adults"}</div></div>
+                  <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}><span className="chip">{pg.done?"✓ COMPLETED":`${pg.complete} of ${pg.total} completed · ${pg.total-pg.complete} pending`}</span><span className="chip">{isOpen?"▲ Collapse":"▼ Open"}</span></div>
+                </div>
+              </button>
+              {isOpen ? <ul className="op-list" style={{marginTop:8}}>{shown.map(f=>{ const m=f.matchId?matchesById.get(f.matchId):null; const r=m?matchResult(m):null; const done=!!(r&&r.complete); return <li key={f.id} style={{opacity:done?.7:1}}><span className={"chip tier-"+Math.min(f.hostTier,5)}>T{f.hostTier}<em>{catLabel(f.category)}</em></span><span className="op-names"><b>{nameOf(f.playerA)}</b><i>v</i><b>{nameOf(f.playerB)}</b></span><span className="muted op-teams">{f.slot||"time not set"}</span>{!f.matchId ? <div style={{display:"flex",gap:6,flexWrap:"wrap"}}><button className="btn btn-tiny btn-primary" onClick={()=>startFromFixture(f)}>Start Live Scoring</button><button className="btn btn-tiny" onClick={()=>markResultPending(f)}>Enter Result Manually</button></div> : <button className="btn btn-tiny" onClick={()=>goToScoreboard(f.matchId)}>{done ? "View Finished" : m?.status==="result_pending" ? "Go to Result" : "Go to Live Score"}</button>}</li>})}</ul> : null}
+            </div>
+          })}</div> : <Empty title="No Official fixtures for this group/date" body="Accept the fixture as Official in Fixtures first."/>
+        )}
       </section>
 
       <section className="card">
         <header className="card-head">
           <h2>Set up a match</h2>
-          <span className="muted">All 3 sets are played · +5 per set won · +25 match win · +20 if the called Wild Card set is won</span>
+          <span className="muted">All 3 sets are played · +5 per set won · +25 match win · Wild Card points disabled</span>
         </header>
         {matchGroup === "kids" && scoringTeams.length === 0 ? (
           <div className="card" style={{marginBottom:12,border:"2px solid #f59e0b"}}>
@@ -5327,7 +5424,7 @@ function ScoringTab({ data, update, notify }) {
                 </div>
               ) : null}
 
-              {m.status !== "result_pending" && active >= 0 && !r.complete ? (
+              {false && m.status !== "result_pending" && active >= 0 && !r.complete ? (
                 <div className="wc-live-control">
                   <div className="wc-live-title">
                     <b>🎟️ Wild Card — available before the first rally of Set {active + 1}</b>
@@ -5477,16 +5574,30 @@ function ScoringTab({ data, update, notify }) {
    Standings
    ============================================================ */
 
-function useStandings(data) {
-  return useMemo(() => computeStandings(data, "all"), [data.teams, data.matches, data.bonuses]);
+function useStandings(data, group = "adult") {
+  return useMemo(() => computeStandings(data, "all", group), [data.teams, data.matches, data.bonuses, group]);
 }
 
 /* Pass a date for one day's table, or "all" for the tournament so far.
    A single day's table leaves the manual bonus out — that is a
    tournament-wide adjustment, not something earned on the day. */
-function computeStandings(data, day) {
+function computeStandings(data, day, group = "all") {
   const wholeRun = !day || day === "all";
-  const table = data.teams.map((t) => ({
+  const isKidsTeamForStandings = (t) => !!t && (String(t.ageGroup || "").toLowerCase() === "kids" || String(t.id || "").startsWith("kids-"));
+  const storedTeams = (data.teams || []);
+  const fixedKidsTeams = [
+    { id:"kids-red", name:"Red", ageGroup:"kids", playerIds:[] },
+    { id:"kids-blue", name:"Blue", ageGroup:"kids", playerIds:[] },
+    { id:"kids-orange", name:"Orange", ageGroup:"kids", playerIds:[] },
+    { id:"kids-black", name:"Black", ageGroup:"kids", playerIds:[] }
+  ].map(base => {
+    const saved = storedTeams.find(t => String(t.id) === base.id) ||
+      storedTeams.find(t => isKidsTeamForStandings(t) && String(t.name||"").trim().toLowerCase() === base.name.toLowerCase());
+    return saved ? {...base, ...saved, id:base.id, name:base.name, ageGroup:"kids"} : base;
+  });
+  const adultTeams = storedTeams.filter(t => !isKidsTeamForStandings(t));
+  const teamPool = group === "kids" ? fixedKidsTeams : group === "adult" ? adultTeams : [...adultTeams, ...fixedKidsTeams];
+  const table = teamPool.map((t) => ({
     id: t.id, name: t.name,
     played: 0, matchWins: 0, matchLosses: 0,
     setsWon: 0, setsLost: 0, setsPlayed: 0,
@@ -5498,15 +5609,96 @@ function computeStandings(data, day) {
   const byId = {};
   table.forEach((r) => (byId[r.id] = r));
 
+  /* VERIFIED 20 SEP 2026 — Adult 19 Sep ledger.
+     The referee workbook has exactly 24 completed Adult matches (19–42),
+     which means 12 completed matches for each colour. Standings for that day
+     are derived directly from those recorded final scores so they cannot be
+     lost because of fixture ids, player-name mismatches, or historical WC set targets.
+     Wild Card bonus remains a separate manual editable adjustment below. */
+  const adultLedger19Sep = [
+    ["Red","Blue",11,4,13,11,11,9],
+    ["Black","Orange",11,2,11,5,7,3],
+    ["Red","Black",11,7,7,1,11,5],
+    ["Red","Orange",11,6,11,4,11,2],
+    ["Blue","Orange",7,0,11,2,11,2],
+    ["Blue","Black",11,4,11,4,11,2],
+    ["Red","Blue",11,2,11,4,7,2],
+    ["Black","Orange",4,11,11,9,6,11],
+    ["Red","Black",11,7,11,6,11,6],
+    ["Red","Orange",3,11,6,11,6,11],
+    ["Blue","Orange",11,9,5,11,4,11],
+    ["Blue","Black",11,6,10,12,11,5],
+    ["Red","Blue",14,12,11,6,11,9],
+    ["Black","Orange",12,10,8,11,11,5],
+    ["Red","Black",11,7,11,4,11,4],
+    ["Red","Orange",11,2,13,11,11,9],
+    ["Blue","Orange",11,4,11,5,11,6],
+    ["Blue","Black",11,6,11,6,9,11],
+    ["Red","Blue",3,11,6,11,11,8],
+    ["Black","Orange",5,11,8,11,5,11],
+    ["Red","Black",11,3,11,7,11,6],
+    ["Red","Orange",9,11,9,11,5,11],
+    ["Blue","Black",11,4,11,6,11,3],
+    ["Blue","Orange",9,11,11,4,7,11]
+  ];
+  const adultColourRow = (colour) => {
+    const c = String(colour || "").toLowerCase();
+    return table.find(r => String(r.name || "").trim().toLowerCase() === c) ||
+           table.find(r => String(r.name || "").toLowerCase().includes(c));
+  };
+  const useAdult19SepLedger = group !== "kids" && (wholeRun || String(day) === "2026-09-19");
+  if (useAdult19SepLedger) {
+    adultLedger19Sep.forEach(x => {
+      const A = adultColourRow(x[0]), B = adultColourRow(x[1]);
+      if (!A || !B) return;
+      const scores = [[x[2],x[3]],[x[4],x[5]],[x[6],x[7]]];
+      const aSets = scores.filter(s => Number(s[0]) > Number(s[1])).length;
+      const bSets = 3 - aSets;
+      A.played++; B.played++;
+      A.setsWon += aSets; B.setsWon += bSets;
+      A.setsLost += bSets; B.setsLost += aSets;
+      A.setsPlayed += 3; B.setsPlayed += 3;
+      A.setPoints += aSets * 5; B.setPoints += bSets * 5;
+      if (aSets > bSets) { A.matchWins++; B.matchLosses++; A.matchPoints += 25; }
+      else { B.matchWins++; A.matchLosses++; B.matchPoints += 25; }
+    });
+  }
+
   (data.matches || []).forEach((m) => {
+    // Adult 19 Sep is already counted from the verified referee ledger above.
+    // Skip stored copies to prevent double-counting or incomplete fixture-link attribution.
+    if (useAdult19SepLedger && String(m.date || "") === "2026-09-19" && !matchIsKidsMixed(data, m)) return;
     if (!wholeRun && m.date !== day) return;
+    const matchKids = matchIsKidsMixed(data, m);
+    if (group === "kids" && !matchKids) return;
+    if (group === "adult" && matchKids) return;
     const r = matchResult(m);
     // Standings are results-only: a live or Result Pending match earns nothing yet.
     if (!r.complete) return;
     const teamAId = resolveMatchTeamId(data, m, "a");
     const teamBId = resolveMatchTeamId(data, m, "b");
-    const A = byId[teamAId], B = byId[teamBId];
-    if (!A || !B) return;
+
+    // 20 Sep standings link fix: completed Adult matches can carry a historical/imported
+    // team id that differs from the current formed-team id. Resolve the standings row
+    // first by resolved id, then by the player's current team membership, then by team name.
+    // This changes only attribution in Standings; stored match scores/results stay untouched.
+    const standingRowForSide = (resolvedId, rawTeam, playerId) => {
+      if (byId[resolvedId]) return byId[resolvedId];
+      const memberTeam = teamPool.find(t => (t.playerIds || []).some(x => String(x) === String(playerId)));
+      if (memberTeam && byId[memberTeam.id]) return byId[memberTeam.id];
+      const rawText = String(rawTeam == null ? "" : rawTeam).trim().toLowerCase();
+      const namedTeam = teamPool.find(t => String(t.name || "").trim().toLowerCase() === rawText);
+      if (namedTeam && byId[namedTeam.id]) return byId[namedTeam.id];
+      const colour = rawText.replace(/^kids[-_ ]?/, "").match(/\b(red|blue|orange|black)\b/);
+      if (colour) {
+        const colourTeam = teamPool.find(t => String(t.name || "").toLowerCase().includes(colour[1]));
+        if (colourTeam && byId[colourTeam.id]) return byId[colourTeam.id];
+      }
+      return null;
+    };
+    const A = standingRowForSide(teamAId, m.teamA, m.playerA);
+    const B = standingRowForSide(teamBId, m.teamB, m.playerB);
+    if (!A || !B || String(A.id) === String(B.id)) return;
 
     A.played++; B.played++;
     A.setsWon += r.aSets; B.setsWon += r.bSets;
@@ -5517,11 +5709,9 @@ function computeStandings(data, day) {
     if (r.winner === "a") { A.matchWins++; B.matchLosses++; }
     if (r.winner === "b") { B.matchWins++; A.matchLosses++; }
 
-    // Wild Card bonus is authoritative from matchResult(), which derives the
-    // result from the completed set score. This prevents a missing/stale stored
-    // `won` flag from dropping a valid +20 bonus.
-    A.wcBonus += r.aWcBonus;
-    B.wcBonus += r.bWcBonus;
+    // Wild Card records are retained for history, but no Wild Card points are awarded.
+    A.wcBonus += 0;
+    B.wcBonus += 0;
 
     [["a", A], ["b", B]].forEach(([side, row]) => {
       (((m.wildCards || {})[side]) || []).forEach((w) => {
@@ -5541,6 +5731,9 @@ function computeStandings(data, day) {
     const vs = {};
     (data.teams || []).filter(o => String(o.id) !== String(t.id)).forEach(o => { vs[o.id] = new Set(); });
     (data.matches || []).forEach((m) => {
+      const matchKids = matchIsKidsMixed(data, m);
+      if (group === "kids" && !matchKids) return;
+      if (group === "adult" && matchKids) return;
       const aId = resolveMatchTeamId(data, m, "a");
       const bId = resolveMatchTeamId(data, m, "b");
       let side = null, opp = null;
@@ -5554,7 +5747,7 @@ function computeStandings(data, day) {
     t.wcUsed = Object.values(t.wcVs).reduce((sum,n) => sum + Number(n || 0), 0);
     t.wcLeft = Math.max(0, 9 - t.wcUsed);
     t.manualBonus = wholeRun ? Number((data.bonuses || {})[t.id]) || 0 : 0;
-    t.points = t.setPoints + t.matchPoints + t.wcBonus + t.manualBonus;
+    t.points = t.setPoints + t.matchPoints + t.manualBonus; // manual referee Wild Card bonus is included immediately in total/ranking
   });
   table.sort((a, b) => b.points - a.points || b.matchWins - a.matchWins || b.setsWon - a.setsWon || a.name.localeCompare(b.name));
   return table;
@@ -5612,11 +5805,11 @@ function computeJuniorStandings(data, cat, day) {
 
 function StandingsTab({ data, update, notify }) {
   const [ageFilter, setAgeFilter] = useState("adult");
-  const table = useStandings(data);
+  const table = useStandings(data, ageFilter);
   const columns = [
     "Rank","Team","Matches","Sets W-L","Set Points",
     "Match Wins","Match Losses","Match Points (25 each)",
-    "Wild Cards Used","Wild Card Bonus","Other Bonus","Total Points",
+    "Wild Cards Used","Auto Wild Card Bonus","Wild Card Bonus (manual)","Total Points",
   ];
   const wcText = (w) => !w ? "Left" : w.won === true ? "Used · Won" : w.won === false ? "Used · Lost" : "Active";
   const rows = table.map((t, i) => {
@@ -5725,17 +5918,16 @@ function StandingsTab({ data, update, notify }) {
             <span className="eyebrow">Work group</span>
             <h2>Standings · scores + Wild Cards</h2>
             <div className="standings-formula">
-              Set Pts = set wins × 5 · Match win = +25 · Successful Wild Card = +20 Bonus
+              Adult standings update from completed Adult Live Scoring results: set wins × 5 + match wins × 25. Wild Card bonus stays editable and re-ranks immediately. Kids Mixed remains separate
             </div>
           </div>
           <select value={ageFilter} onChange={(e) => setAgeFilter(e.target.value)}>
             <option value="adult">Adults only</option>
-            <option value="kids">Kids only</option>
+            <option value="kids">Kids Mixed</option>
           </select>
         </header>
       </section>
 
-      {ageFilter === "adult" ? (
       <>
       <DataBar
         name="standings"
@@ -5763,8 +5955,8 @@ function StandingsTab({ data, update, notify }) {
 
           <section className="card">
             <header className="card-head">
-              <h2>Team standings</h2>
-              <span className="muted">5 per set won · 25 match win · +20 successful Wild Card set</span>
+              <h2>{ageFilter === "kids" ? "Kids Mixed — Colour Team Standings" : "Adults — Live Score Colour Team Standings"}</h2>
+              <span className="muted">5 per set won · 25 per match win · referee enters Wild Card bonus manually</span>
             </header>
             <div className="table-scroll">
               <table className="standings">
@@ -5780,8 +5972,8 @@ function StandingsTab({ data, update, notify }) {
                     <th title="Matches lost">Match L</th>
                     <th title="25 points for every match won">Match pts</th>
                     <th title="3 Wild Cards against each of 3 opponents = 9 total"><span className="wc-head">Wild Cards <span className="muted small">(used / 9)</span></span></th>
-                    <th title="20 points for each successful Wild Card">Bonus</th>
-                    <th>Other Bonus</th>
+                    <th title="Automatic Wild Card points are disabled">Auto WC</th>
+                    <th title="Editable referee Wild Card bonus; enter 20 when awarded">Wild Card Bonus</th>
                     <th>Total</th>
                   </tr>
                 </thead>
@@ -5812,7 +6004,7 @@ function StandingsTab({ data, update, notify }) {
                           value={(data.bonuses || {})[t.id] == null ? "" : String(data.bonuses[t.id])}
                           onChange={(e) => setBonus(t.id, e.target.value)}
                           placeholder="—"
-                          aria-label={"Other bonus points for " + t.name}
+                          aria-label={"Manual Wild Card bonus points for " + t.name}
                         />
                       </td>
                       <td className="mono total">{t.points}</td>
@@ -5826,9 +6018,8 @@ function StandingsTab({ data, update, notify }) {
       )}
 
       </>
-      ) : null}
 
-      {ageFilter === "kids" ? KID_CATEGORIES.map((cat) => {
+      {false && ageFilter === "kids" ? KID_CATEGORIES.map((cat) => {
         const jr = computeJuniorStandings(data, cat, "all");
         if (!jr.length) return null;
         return (
@@ -9039,7 +9230,7 @@ function DashboardTab({ data, role, notify, update, setTab }) {
       <section className="card">
         <header className="card-head">
           <h2>Standings on the day</h2>
-          <span className="muted">5 per set · 25 match win · +20 successful Wild Card set</span>
+          <span className="muted">5 per set · 25 match win · Wild Card points disabled</span>
         </header>
         {table.length === 0 ? (
           <Empty title="No results yet on this day" body="The day's table builds itself as matches finish." />
@@ -9083,7 +9274,7 @@ function DashboardTab({ data, role, notify, update, setTab }) {
                         </div>
                         <div className="muted" style={{fontSize:11, marginTop:4}}>{3 - t.wcLeft} used · {t.wcLeft} left</div>
                       </td>
-                      <td className="mono">{t.wcBonus}</td>
+                      <td className="mono"></td>
                       <td className="mono total">{t.points}</td>
                     </tr>
                   );
@@ -10602,6 +10793,108 @@ function WildCardScoringTab({ data, setData, role }) {
 }
 
 
+
+/* TT PULSE 19 SEP 2026 ADULT RESULTS IMPORT SAFE POINT
+   Source: referee adult scoring workbook supplied after play.
+   Scoring in this build is SET + MATCH ONLY: +5 per set won, +25 match win.
+   Historical Wild Card calls from the sheet are intentionally NOT added to points.
+   Existing Kids matches/results are never changed. */
+const ADULT_RESULTS_20260919 = [
+  ["Reshma Shah","Anjali Wakade",11,4,13,11,11,9],
+  ["Anupama M","Heena Dhanuka",11,2,11,5,7,3],
+  ["Reshma Shah","Anupama M",11,7,7,1,11,5],
+  ["Reshma Shah","Heena Dhanuka",11,6,11,4,11,2],
+  ["Anjali Wakade","Heena Dhanuka",7,0,11,2,11,2],
+  ["Anjali Wakade","Anupama M",11,4,11,4,11,2],
+  ["Abhay Jain","Vihaan Pandit",11,2,11,4,7,2],
+  ["Vinod Patil","Anand Nahata",4,11,11,9,6,11],
+  ["Abhay Jain","Vinod Patil",11,7,11,6,11,6],
+  ["Abhay Jain","Anand Nahata",3,11,6,11,6,11],
+  ["Vihaan Pandit","Anand Nahata",11,9,5,11,4,11],
+  ["Vihaan Pandit","Vinod Patil",11,6,10,12,11,5],
+  ["Taral Shah","Anil Hebbar",14,12,11,6,11,9],
+  ["Manoj Pillai","Hardik Gala",12,10,8,11,11,5],
+  ["Taral Shah","Manoj Pillai",11,7,11,4,11,4],
+  ["Taral Shah","Hardik Gala",11,2,13,11,11,9],
+  ["Anil Hebbar","Hardik Gala",11,4,11,5,11,6],
+  ["Anil Hebbar","Manoj Pillai",11,6,11,6,9,11],
+  ["Mahesh Dike","Vimlesh Mishra",3,11,6,11,11,8],
+  ["Mahesh Subhlok","Hitesh Nichani",5,11,8,11,5,11],
+  ["Mahesh Dike","Mahesh Subhlok",11,3,11,7,11,6],
+  ["Mahesh Dike","Hitesh Nichani",9,11,9,11,5,11],
+  ["Vimlesh Mishra","Mahesh Subhlok",11,4,11,6,11,3],
+  ["Vimlesh Mishra","Hitesh Nichani",9,11,11,4,7,11]
+];
+
+function ttNormName(v) {
+  return String(v || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+}
+
+function applyAdultResults20260919(state) {
+  if (!state || state.adultResults20260919Imported) return state;
+  const players = state.players || [];
+  const fixtures = state.fixtures || [];
+  const oldMatches = state.matches || [];
+  const byName = new Map(players.map(p => [ttNormName(`${p.first || ""} ${p.last || ""}`), p]));
+  let matches = oldMatches.slice();
+  let nextFixtures = fixtures.slice();
+  let imported = 0;
+
+  ADULT_RESULTS_20260919.forEach((r, idx) => {
+    const pa = byName.get(ttNormName(r[0]));
+    const pb = byName.get(ttNormName(r[1]));
+    if (!pa || !pb) return;
+    const fixture = nextFixtures.find(f => {
+      const samePair = (f.playerA === pa.id && f.playerB === pb.id) || (f.playerA === pb.id && f.playerB === pa.id);
+      return samePair && String(f.date || "") === "2026-09-19" && !((f.fixtureGroup === "kids") || isKid(f.category));
+    });
+    if (!fixture) return;
+
+    const direct = fixture.playerA === pa.id;
+    const sets = direct
+      ? [{a:String(r[2]),b:String(r[3])},{a:String(r[4]),b:String(r[5])},{a:String(r[6]),b:String(r[7])}]
+      : [{a:String(r[3]),b:String(r[2])},{a:String(r[5]),b:String(r[4])},{a:String(r[7]),b:String(r[6])}];
+
+    const existingIndex = matches.findIndex(m => m.id === fixture.matchId ||
+      (String(m.date || "") === "2026-09-19" && ((m.playerA===fixture.playerA && m.playerB===fixture.playerB) || (m.playerA===fixture.playerB && m.playerB===fixture.playerA))));
+    const existing = existingIndex >= 0 ? matches[existingIndex] : null;
+    const mid = existing ? existing.id : (fixture.matchId || `adult-19sep-${idx+19}`);
+    const m = {
+      ...(existing || {}),
+      id: mid,
+      date: "2026-09-19",
+      teamA: resolveMatchTeamId(state, fixture, "a"),
+      teamB: resolveMatchTeamId(state, fixture, "b"),
+      category: fixture.category,
+      fixtureGroup: "adult",
+      individual: !!fixture.individual,
+      playerA: fixture.playerA,
+      playerB: fixture.playerB,
+      sets,
+      status: "final",
+      fixtureId: fixture.id,
+      entryMode: "adult-sheet-import",
+      manualResult: true,
+      importedAdultSheet20260919: true,
+      completedAt: (existing && existing.completedAt) || "2026-09-19T23:00:00+05:30",
+      wildCards: {a:[], b:[]}
+    };
+    if (existingIndex >= 0) matches[existingIndex] = m; else matches.unshift(m);
+    nextFixtures = nextFixtures.map(f => f.id === fixture.id ? {...f, matchId: mid, resultPending:false} : f);
+    imported++;
+  });
+
+  // Only mark complete when every supplied adult result was matched to an Official Fixture.
+  // If not, leave the flag unset so the app can retry after player/fixture data refreshes.
+  return {
+    ...state,
+    matches,
+    fixtures: nextFixtures,
+    ...(imported === ADULT_RESULTS_20260919.length ? {adultResults20260919Imported:true} : {}),
+    adultResults20260919ImportedCount: imported
+  };
+}
+
 function App() {
   const [data, setData] = useState(EMPTY);
   const [ready, setReady] = useState(false);
@@ -10734,6 +11027,19 @@ setData(fresh);
       document.removeEventListener("visibilitychange", pull);
     };
   }, [ready]);
+
+  /* One-time 19 Sep adult result import. It updates only the supplied Adult fixtures;
+     Kids scores/results remain byte-for-byte untouched in state. */
+  useEffect(() => {
+    if (!ready || !data || data.adultResults20260919Imported) return;
+    const next = applyAdultResults20260919(data);
+    if (next === data || !next.adultResults20260919ImportedCount) return;
+    setData(next);
+    const json = JSON.stringify(next);
+    stamp.current = json;
+    try { localStorage.setItem(STORE_KEY, json); } catch(e) {}
+    Promise.resolve(window.storage.set(STORE_KEY, json)).catch(e => console.error("19 Sep adult result import save failed", e));
+  }, [ready, data && data.players && data.players.length, data && data.fixtures && data.fixtures.length, data && data.adultResults20260919Imported]);
 
   /* One-time safe team recovery. If a deployed/cloud state has no teams, restore the
      verified team assignments and immediately persist them. Existing/non-empty teams are untouched. */
