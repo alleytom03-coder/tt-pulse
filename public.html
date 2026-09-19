@@ -1,3 +1,4 @@
+<!-- TT PULSE PUBLIC DEV 2026-09-19 v2: cumulative standings + ranked player performance + chronological mobile timeline -->
 <!-- TT PULSE LIVE SCORING RESULT-LATER SAFETY 2026-09-17 -->
 <!-- Fixture safe-point preserved; added Result Pending / Enter Result Later workflow only -->
 <!-- TT PULSE RECOVERED TEAMS + ALL-CHANGE AUTOSAVE SAFETY 2026-09-15 -->
@@ -6,6 +7,7 @@
 <!-- TT PULSE SAFE TIER ROUND-ROBIN FIXTURES 2026-09-10 -->
 <!-- TT PULSE UPDATED WILDCARD + FIXED 4-PLAYER TIERS 2026-09-11 -->
 <!-- TT PULSE PUBLIC LIVE GROUP FILTER 2026-09-19: automatic current date + All Matches / Adults / Kids Mixed viewer selector -->
+<!-- TT PULSE PUBLIC READ-ONLY DEV 2026-09-19: admin build untouched; public writes disabled; chronological display -->
 <!DOCTYPE html>
 <html lang="en">
 <!-- TT PULSE SAFE TIER FIX 2026-09-08: canonical tier grouping for every calibrated player -->
@@ -38,11 +40,23 @@
 .card{background:linear-gradient(145deg,rgba(10,29,61,.91),rgba(16,43,86,.87))!important;backdrop-filter:blur(9px);border-color:rgba(245,196,81,.18)!important;box-shadow:0 12px 32px rgba(0,0,0,.20)}
 .rail-item.on{background:linear-gradient(90deg,rgba(245,196,81,.18),rgba(79,156,255,.08))!important;box-shadow:inset 3px 0 #f5c451}
 </style>
+
+<style id="public-mobile-v2">
+@media (max-width:720px){
+  details.card summary{font-size:15px;line-height:1.3}
+  details.card .op-list li{display:grid!important;grid-template-columns:78px 58px 1fr;gap:6px 8px;align-items:center}
+  details.card .op-names{grid-column:1 / -1;display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+  details.card .op-teams{grid-column:1 / -1}
+  details.card .op-list li>strong{grid-column:3;margin-left:0!important;text-align:right}
+}
+</style>
 </head>
 <body>
 <div id="root"><div id="fallback">Loading. If this message stays, connect to the internet once so the page can fetch React, then reload.</div></div>
 
 <script>
+window.TT_PUBLIC_READ_ONLY = true;
+
 /* ==================================================================
    WHERE THE TOURNAMENT LIVES
 
@@ -403,6 +417,9 @@ async function saveCalibrationToSupabase(playerId, cal) {
     },
 
     set: function (k, v) {
+      if (window.TT_PUBLIC_READ_ONLY) {
+        return Promise.resolve({ key: k, value: v, readOnly: true });
+      }
       local.set(k, v);
       if (online()) {
         pending = v;
@@ -411,7 +428,11 @@ async function saveCalibrationToSupabase(playerId, cal) {
       return Promise.resolve({ key: k, value: v });
     },
 
-    delete: function (k) { localStorage.removeItem(k); return Promise.resolve({ key: k, deleted: true }); },
+    delete: function (k) {
+      if (window.TT_PUBLIC_READ_ONLY) return Promise.resolve({ key: k, deleted: false, readOnly: true });
+      localStorage.removeItem(k);
+      return Promise.resolve({ key: k, deleted: true });
+    },
     list: function (p) {
       var pre = p || "", keys = [];
       for (var i = 0; i < localStorage.length; i++) { var kk = localStorage.key(i); if (kk.indexOf(pre) === 0) keys.push(kk); }
@@ -8736,8 +8757,6 @@ function DashboardTab({ data, role, notify, update, setTab }) {
   const groupAllowsFixture = (f) => publicGroup === "all" || (publicGroup === "kids" ? isKidsFixture(f) : !isKidsFixture(f));
   const groupAllowsMatch = (m) => publicGroup === "all" || (publicGroup === "kids" ? isKidsMatch(m) : !isKidsMatch(m));
 
-  const liveNow = data.matches.filter((m) => m.date === day && groupAllowsMatch(m) && m.status === "live" && !matchResult(m).complete);
-  const finishedToday = data.matches.filter((m) => m.date === day && groupAllowsMatch(m) && matchResult(m).complete);
   // Public match-day order must follow the actual Official Fixture clock time.
   // Imported fixtures can contain exact times such as 9:00 AM / 10:00 AM,
   // which are not necessarily members of the broad SLOTS availability list.
@@ -8750,6 +8769,18 @@ function DashboardTab({ data, role, notify, update, setTab }) {
     if (String(m[3]).toUpperCase() === "PM") h += 12;
     return h * 60 + mins;
   };
+
+  const matchFixture = (m) => (data.fixtures || []).find((f) => f.id === m.fixtureId || f.matchId === m.id);
+  const matchStartMinutes = (m) => {
+    const f = matchFixture(m);
+    return fixtureStartMinutes((f && f.slot) || m.slot || m.time || "");
+  };
+  const chronologicalMatches = (rows) => [...rows].sort((a,b) =>
+    matchStartMinutes(a) - matchStartMinutes(b) || String(a.id || "").localeCompare(String(b.id || ""))
+  );
+
+  const liveNow = chronologicalMatches(data.matches.filter((m) => m.date === day && groupAllowsMatch(m) && m.status === "live" && !matchResult(m).complete));
+  const finishedToday = chronologicalMatches(data.matches.filter((m) => m.date === day && groupAllowsMatch(m) && matchResult(m).complete));
 
   const upcoming = (data.fixtures || [])
     .filter((f) => f.date === day && groupAllowsFixture(f) && f.official !== false && !f.matchId)
@@ -8766,6 +8797,47 @@ function DashboardTab({ data, role, notify, update, setTab }) {
 
   const table = computeStandings(data, day).filter((t) => t.played > 0);
   const overall = computeStandings(data, "all");
+
+  // Public leaderboard is cumulative THROUGH the selected date, not just this day.
+  const completedThroughDay = (data.matches || []).filter((m) => m.date <= day && groupAllowsMatch(m) && matchResult(m).complete);
+  const standingsThroughDay = (data.teams || []).map((t) => {
+    let played=0, matchWins=0, matchLosses=0, setsWon=0, setsLost=0, setPoints=0, matchPoints=0, wcBonus=0, points=0;
+    completedThroughDay.forEach((m) => {
+      const isA = String(m.teamA) === String(t.id), isB = String(m.teamB) === String(t.id);
+      if (!isA && !isB) return;
+      const r = matchResult(m); played++;
+      const won = (isA && r.winner === "a") || (isB && r.winner === "b");
+      if (won) matchWins++; else matchLosses++;
+      setsWon += isA ? r.aSets : r.bSets; setsLost += isA ? r.bSets : r.aSets;
+      setPoints += (isA ? r.aSets : r.bSets) * 5;
+      matchPoints += won ? 25 : 0;
+      wcBonus += isA ? (r.aWcBonus || 0) : (r.bWcBonus || 0);
+      points += isA ? r.aPts : r.bPts;
+    });
+    return {id:t.id,name:t.name,played,matchWins,matchLosses,setsWon,setsLost,setPoints,matchPoints,wcBonus,points};
+  }).filter(t=>t.played>0).sort((a,b)=>b.points-a.points || b.matchWins-a.matchWins || b.setsWon-a.setsWon || a.name.localeCompare(b.name));
+
+  const playerPerformanceThroughDay = (data.players || []).map((p) => {
+    let played=0, won=0, setsWon=0, setsLost=0, rallyFor=0, rallyAgainst=0, points=0;
+    completedThroughDay.forEach((m) => {
+      const isA=String(m.playerA)===String(p.id), isB=String(m.playerB)===String(p.id);
+      if (!isA && !isB) return;
+      const r=matchResult(m); played++;
+      if ((isA && r.winner === "a") || (isB && r.winner === "b")) won++;
+      setsWon += isA ? r.aSets : r.bSets; setsLost += isA ? r.bSets : r.aSets;
+      points += isA ? r.aPts : r.bPts;
+      (m.sets || []).forEach(ss=>{rallyFor += isA ? num(ss.a):num(ss.b); rallyAgainst += isA ? num(ss.b):num(ss.a);});
+    });
+    const team=(data.teams||[]).find(t=>(t.playerIds||[]).includes(p.id));
+    return {p,team,played,won,lost:played-won,setsWon,setsLost,points,diff:rallyFor-rallyAgainst};
+  }).filter(x=>x.played>0).sort((a,b)=>b.points-a.points || b.won-a.won || b.setsWon-a.setsWon || b.diff-a.diff || fullName(a.p).localeCompare(fullName(b.p)));
+
+  // One compact chronological timeline for phones: official fixture time controls order.
+  const timelineRows = fixturesToday.map((f) => {
+    const m = (data.matches || []).find(mm => mm.id === f.matchId || mm.fixtureId === f.id);
+    const r = m ? matchResult(m) : null;
+    return {f,m,r,time:fixtureStartMinutes(f.slot),status:m ? (r.complete ? "FINISHED" : "LIVE") : "UPCOMING"};
+  }).sort((a,b)=>a.time-b.time || Number(a.f.hostTier||999)-Number(b.f.hostTier||999));
 
   const bySlot = {};
   upcoming.forEach((f) => {
@@ -8919,6 +8991,23 @@ function DashboardTab({ data, role, notify, update, setTab }) {
         </div>
       </section>
 
+      <details className="card" style={{padding:"0"}}>
+        <summary style={{cursor:"pointer",padding:"16px 18px",fontWeight:900}}>Chronological match order — earliest to latest ({timelineRows.length})</summary>
+        <div style={{padding:"0 18px 18px"}}>
+          {timelineRows.length === 0 ? <div className="muted">No official fixtures for this selection.</div> : (
+            <div className="op"><div className="op-block"><ul className="op-list">
+              {timelineRows.map(({f,m,r,status}) => <li key={f.id}>
+                <span className="mono" style={{minWidth:82,fontWeight:900}}>{f.slot || "TBC"}</span>
+                <span className={"chip tier-" + Math.min(f.hostTier || 1,5)}>T{f.hostTier || "—"}<em>{catLabel(f.category)}</em></span>
+                <span className="op-names"><b>{nameOf(f.playerA)}</b><i>v</i><b>{nameOf(f.playerB)}</b></span>
+                <span className="muted op-teams">{teamOf(f.teamA)} · {teamOf(f.teamB)}</span>
+                <strong style={{marginLeft:"auto"}}>{status}{m && r && r.complete ? ` · ${r.aSets}–${r.bSets}` : ""}</strong>
+              </li>)}
+            </ul></div></div>
+          )}
+        </div>
+      </details>
+
       <section className="card callup">
         <header className="card-head">
           <h2>Players scheduled for this day</h2>
@@ -9029,59 +9118,36 @@ function DashboardTab({ data, role, notify, update, setTab }) {
 
       <section className="card">
         <header className="card-head">
-          <h2>Standings on the day</h2>
-          <span className="muted">5 per set · 25 match win · +20 successful Wild Card set</span>
+          <h2>Team standings — so far</h2>
+          <span className="muted">Cumulative through {prettyDate(day)}</span>
         </header>
-        {table.length === 0 ? (
-          <Empty title="No results yet on this day" body="The day's table builds itself as matches finish." />
-        ) : (
-          <div className="table-scroll">
-            <table className="standings">
-              <thead>
-                <tr>
-                  <th>#</th><th>Team</th><th>P</th><th>W–L</th><th>Sets W–L</th>
-                  <th>Set Scores</th><th>Set Pts</th><th>Match Pts</th><th><span className="wc-head">Wild Cards
-      <span className="wc-head-deck" aria-label="3 Wild Cards">
-        <span className="wc-playing-card">★</span>
-        <span className="wc-playing-card">★</span>
-        <span className="wc-playing-card">★</span>
-      </span>
-    </span></th><th title="20 points for each successful Wild Card">Bonus</th><th>Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {table.map((t, i) => {
-                  const all = overall.find((x) => x.id === t.id) || { points: 0 };
-                  return (
-                    <tr key={t.id} className={i === 0 ? "first" : ""}>
-                      <td className="mono rank">{i + 1}</td>
-                      <td className="strong">{t.name}</td>
-                      <td className="mono">{t.played}</td>
-                      <td className="mono">{t.matchWins}–{t.matchLosses}</td>
-                      <td className="mono">
-                        <span className="set-record">
-                          <span className={t.setsWon > t.setsLost ? "set-record-winner" : ""}>{t.setsWon}</span>
-                          <span className="set-record-dash">–</span>
-                          <span className={t.setsLost > t.setsWon ? "set-record-winner" : ""}>{t.setsLost}</span>
-                        </span>
-                      </td>
-                      <td>{latestTeamSetScores(t.id)}</td>
-                      <td className="mono">{t.setPoints}</td>
-                      <td className="mono">{t.matchPoints}</td>
-                      <td>
-                        <div className="wc-visual-cards" title={`${3 - t.wcLeft} used · ${t.wcLeft} left · ${t.wcWins} won · ${t.wcLosses} lost`}>
-                          {Array.from({length: t.wcLeft}).map((_,i) => <span className="wc-playing-card" key={i}>★</span>)}
-                        </div>
-                        <div className="muted" style={{fontSize:11, marginTop:4}}>{3 - t.wcLeft} used · {t.wcLeft} left</div>
-                      </td>
-                      <td className="mono">{t.wcBonus}</td>
-                      <td className="mono total">{t.points}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+        {standingsThroughDay.length === 0 ? <Empty title="No completed results yet" body="Standings build automatically as matches finish." /> : (
+          <div className="table-scroll"><table className="standings"><thead><tr>
+            <th>Rank</th><th>Team</th><th>P</th><th>W–L</th><th>Sets W–L</th><th>Set Pts</th><th>Match Pts</th><th>WC Bonus</th><th>Total</th>
+          </tr></thead><tbody>
+            {standingsThroughDay.map((t,i)=><tr key={t.id} className={i===0?"first":""}>
+              <td className="mono rank">{i+1}</td><td className="strong">{t.name}</td><td className="mono">{t.played}</td>
+              <td className="mono">{t.matchWins}–{t.matchLosses}</td><td className="mono">{t.setsWon}–{t.setsLost}</td>
+              <td className="mono">{t.setPoints}</td><td className="mono">{t.matchPoints}</td><td className="mono">{t.wcBonus}</td><td className="mono total">{t.points}</td>
+            </tr>)}
+          </tbody></table></div>
+        )}
+      </section>
+
+      <section className="card">
+        <header className="card-head">
+          <h2>Player performance ranking — so far</h2>
+          <span className="muted">Based on completed matches through {prettyDate(day)}</span>
+        </header>
+        {playerPerformanceThroughDay.length === 0 ? <Empty title="No player results yet" body="Rankings appear as matches finish." /> : (
+          <div className="table-scroll"><table className="standings"><thead><tr>
+            <th>Rank</th><th>Player</th><th>Team</th><th>P</th><th>W–L</th><th>Sets W–L</th><th>Points</th>
+          </tr></thead><tbody>
+            {playerPerformanceThroughDay.map((x,i)=><tr key={x.p.id} className={i===0?"first":""}>
+              <td className="mono rank">{i+1}</td><td className="strong">{fullName(x.p)}</td><td>{x.team ? x.team.name : "—"}</td>
+              <td className="mono">{x.played}</td><td className="mono">{x.won}–{x.lost}</td><td className="mono">{x.setsWon}–{x.setsLost}</td><td className="mono total">{x.points}</td>
+            </tr>)}
+          </tbody></table></div>
         )}
       </section>
 
@@ -9092,7 +9158,7 @@ function DashboardTab({ data, role, notify, update, setTab }) {
             <span className="muted">{finishedToday.length} results</span>
           </header>
           <div className="board-stack">
-            {finishedToday.slice(0, 12).map((m) => (
+            {finishedToday.map((m) => (
               <LiveBoard key={m.id} m={m} data={data} compact />
             ))}
           </div>
