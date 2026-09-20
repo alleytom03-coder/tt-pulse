@@ -1,4 +1,7 @@
-<!-- FINAL ADULT STANDINGS RECONCILED SAFE 2026-09-20 -->
+<!-- APPLY TODAY 20 SEP 2026: audited basic scoring = 5/set + 25/match; final-only Day2 standings; Adult/Kids separated; duplicate fixtures filtered; mobile Reopen/Delete retained. -->
+<!-- DAY-BY-DAY CUMULATIVE STANDINGS SAFE 2026-09-20 -->
+<!-- FINAL CHECKED BEFORE GITHUB 20 SEP 2026: duplicate fixture pairs filtered; Day-2 final-only standings; Reopen removes points until re-finalised. -->
+<!-- FINAL DAY-2 CLEAN START: Day 1 carry-forward only; Day 2 date-filtered stats; date-scoped WC bonus; cumulative total. -->
 <!-- TT PULSE MOBILE SCORING SAFE 2026-09-20 -->
 <!-- TT PULSE PLAYER + OPPONENT ONLY SEARCH SAFE 2026-09-20 -->
 <!-- TT PULSE ADULT 19 SEP BLANK SCREEN FIX 2026-09-19: removed out-of-scope fixtureIsKids reference from importer -->
@@ -19,6 +22,8 @@
 <!-- TT PULSE MOBILE + VERIFIED ADULT STANDINGS LOCK: 12 EACH / RED 28 / BLUE 20 / ORANGE 16 / BLACK 8 — 2026-09-20 -->
 <!-- TT PULSE MOBILE WC EDITABLE STANDINGS SAFE 2026-09-20 -->
 <!DOCTYPE html>
+<!-- VERIFIED 20 SEP MOBILE RESULT CONTROL: finished matches visible on phone; Reopen + confirmed Delete Result; Day-2 category standings remain date/group filtered. -->
+<!-- EXACT-NAME SAFE 20 SEP: player identity uses IDs; Annsh Kulai (lcpz2h8d) and Joy Verma (17kmhp7l) verified from backup. Robust delete/reopen; high-contrast finished results; 5/set + 25/match. Same-team practice tests remain excluded from TEAM standings to prevent corrupting Red-v-Red totals. -->
 <html lang="en">
 <!-- TT PULSE SAFE TIER FIX 2026-09-08: canonical tier grouping for every calibrated player -->
 <head>
@@ -49,6 +54,13 @@
 .topbar,.rail{background:rgba(6,17,38,.86)!important;backdrop-filter:blur(10px)}
 .card{background:linear-gradient(145deg,rgba(10,29,61,.91),rgba(16,43,86,.87))!important;backdrop-filter:blur(9px);border-color:rgba(245,196,81,.18)!important;box-shadow:0 12px 32px rgba(0,0,0,.20)}
 .rail-item.on{background:linear-gradient(90deg,rgba(245,196,81,.18),rgba(79,156,255,.08))!important;box-shadow:inset 3px 0 #f5c451}
+</style>
+
+<style>
+/* 20 Sep emergency visibility patch: finished result cards must remain readable on mobile */
+.finished-match, .finished-match *, [data-status="final"], [data-status="final"] * { opacity: 1 !important; }
+.finished-match, [data-status="final"] { color:#111 !important; }
+.finished-match .muted, [data-status="final"] .muted { color:#374151 !important; }
 </style>
 </head>
 <body>
@@ -4572,7 +4584,30 @@ function ScoringTab({ data, update, notify }) {
   const todayStr = ymd(new Date());
   function fDateKey(f){ return String(f.date || ""); }
   const fixtureIsKids = (f) => (f.fixtureGroup === "kids") || isKid(f.category);
-  const groupOfficialFixtures = (data.fixtures || []).filter(f => f.official !== false && (matchGroup === "kids" ? fixtureIsKids(f) : !fixtureIsKids(f)));
+  // 2026-09-20 SAFE FIX: remove duplicate Official Fixture player combinations before
+  // they reach mobile search/scoring. A player-vs-player pairing is one league fixture
+  // inside its Adults/Kids group. If duplicate imported/accepted rows exist, prefer the
+  // row already linked to a match; otherwise keep the earliest chronological row.
+  const groupOfficialFixturesRaw = (data.fixtures || []).filter(f =>
+    f.official !== false && (matchGroup === "kids" ? fixtureIsKids(f) : !fixtureIsKids(f))
+  );
+  const fixturePlayerPairKey = (f) => {
+    const a = String(f.playerA || "").trim().toLowerCase();
+    const b = String(f.playerB || "").trim().toLowerCase();
+    return [a,b].sort().join("||");
+  };
+  const dedupedFixtureMap = new Map();
+  [...groupOfficialFixturesRaw]
+    .sort((a,b)=> String(a.date||"").localeCompare(String(b.date||"")) || SLOTS.indexOf(a.slot)-SLOTS.indexOf(b.slot))
+    .forEach(f => {
+      const k = fixturePlayerPairKey(f);
+      const prev = dedupedFixtureMap.get(k);
+      if (!prev) { dedupedFixtureMap.set(k,f); return; }
+      // Never discard the fixture that is already tied to a scored/live match.
+      if (!prev.matchId && f.matchId) dedupedFixtureMap.set(k,f);
+    });
+  const groupOfficialFixtures = Array.from(dedupedFixtureMap.values());
+  const duplicateFixtureCount = Math.max(0, groupOfficialFixturesRaw.length - groupOfficialFixtures.length);
   const scoringDates = Array.from(new Set(groupOfficialFixtures.map(f=>fDateKey(f)).filter(Boolean))).sort();
   const effectiveScoringDate = scoringDates.includes(scoringDate) ? scoringDate : (scoringDates[0] || scoringDate);
   const todaysFixtures = groupOfficialFixtures
@@ -4596,10 +4631,30 @@ function ScoringTab({ data, update, notify }) {
     return {key:`chrono-${f.id||idx}`,list:[f],complete,total:1,done:complete===1};
   });
   const fixtureSearchText = String(fixtureSearchApplied || "").trim().toLowerCase();
+  const searchNorm = (v) => String(v||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+  const editDistance = (a,b) => {
+    a=searchNorm(a); b=searchNorm(b);
+    const dp=Array.from({length:a.length+1},(_,i)=>[i]);
+    for(let j=1;j<=b.length;j++) dp[0][j]=j;
+    for(let i=1;i<=a.length;i++) for(let j=1;j<=b.length;j++) dp[i][j]=Math.min(dp[i-1][j]+1,dp[i][j-1]+1,dp[i-1][j-1]+(a[i-1]===b[j-1]?0:1));
+    return dp[a.length][b.length];
+  };
+  const personSearchHit = (fullName,q) => {
+    const n=searchNorm(fullName), z=searchNorm(q);
+    if(!z) return true;
+    if(n.includes(z)) return true;
+    const nw=n.split(/\s+/), qw=z.split(/\s+/);
+    if(qw.length>=2 && nw.length>=2) {
+      const lastOK=nw[nw.length-1]===qw[qw.length-1];
+      const firstOK=editDistance(nw[0],qw[0])<=1;
+      return lastOK && firstOK;
+    }
+    return false;
+  };
   const fixtureMatchesSearch = (f) => {
     if (!fixtureSearchText) return true;
-    const hay = [nameOf(f.playerA), nameOf(f.playerB), teamById(f.teamA)?.name, teamById(f.teamB)?.name, f.slot, `T${f.hostTier || ""}`]
-      .filter(Boolean).join(" " ).toLowerCase();
+    if (personSearchHit(nameOf(f.playerA),fixtureSearchText) || personSearchHit(nameOf(f.playerB),fixtureSearchText)) return true;
+    const hay = [teamById(f.teamA)?.name, teamById(f.teamB)?.name, f.slot, `T${f.hostTier || ""}`].filter(Boolean).join(" ").toLowerCase();
     return hay.includes(fixtureSearchText);
   };
   // When searching a player, search ALL official fixtures in the selected group across every date.
@@ -4998,13 +5053,19 @@ function ScoringTab({ data, update, notify }) {
     update((d) => ({ ...d, matches: d.matches.map((m) => (m.id === mid ? { ...m, status } : m)) }));
   };
 
-  const removeMatch = (mid) =>
+  const removeMatch = (mid) => {
+    const doomed = (data.matches || []).find(m => String(m.id) === String(mid));
+    const doomedFixtureId = doomed && doomed.fixtureId;
     update((d) => ({
       ...d,
-      matches: d.matches.filter((m) => m.id !== mid),
-      // Deleting a test/result must fully release its Official Fixture so it can be played again.
+      matches: (d.matches || []).filter((m) => String(m.id) !== String(mid)),
+      // Fully release the linked Official Fixture. Match id links are not always
+      // identical in imported/older records, so fixtureId is also authoritative.
       fixtures: (d.fixtures || []).map((f) => {
-        if (f.matchId !== mid && f.liveMatchId !== mid) return f;
+        const linked = String(f.matchId || "") === String(mid) ||
+          String(f.liveMatchId || "") === String(mid) ||
+          (doomedFixtureId && String(f.id) === String(doomedFixtureId));
+        if (!linked) return f;
         const n = { ...f };
         delete n.matchId;
         delete n.liveMatchId;
@@ -5012,6 +5073,9 @@ function ScoringTab({ data, update, notify }) {
         return n;
       }),
     }));
+    setExpandedFinished(x => { const n={...x}; delete n[mid]; return n; });
+    notify("Result deleted. Its points are removed from standings and the fixture is available to score again.");
+  };
 
   const columns = [
     "Date",
@@ -5217,7 +5281,7 @@ function ScoringTab({ data, update, notify }) {
           visiblePairingGroups.length ? <div className="stack">{visiblePairingGroups.flatMap(pg=>pg.visibleList||[]).map(f=>{
             const aName=nameOf(f.playerA), bName=nameOf(f.playerB);
             const q=fixtureSearchText;
-            const aHit=String(aName||"").toLowerCase().includes(q);
+            const aHit=personSearchHit(aName,q);
             const searchedName=aHit?aName:bName;
             const opponentName=aHit?bName:aName;
             const m=f.matchId?matchesById.get(f.matchId):null;
@@ -5363,13 +5427,14 @@ function ScoringTab({ data, update, notify }) {
           const finishedCollapsed = r.complete && !expandedFinished[m.id];
           if (finishedCollapsed) {
             return (
-              <section id={"scoreboard-" + m.id} className="board mobile-finished-board" key={m.id} style={{background:"#e5e7eb",opacity:.82,border:"1px solid #cbd5e1"}}>
-                <div className="board-top" style={{alignItems:"center",gap:10,flexWrap:"wrap"}}>
+              <section id={"scoreboard-" + m.id} className="board mobile-finished-board" key={m.id} style={{background:"#f8fafc",opacity:1,border:"2px solid #94a3b8",color:"#111827"}}>
+                <div className="board-top" style={{alignItems:"center",gap:10,flexWrap:"wrap",color:"#111827"}}>
                   <span className="status final">✓ FINISHED</span>
-                  <b style={{flex:"1 1 260px"}}>{pa ? fullName(pa) : "—"} <span className="muted">vs</span> {pb ? fullName(pb) : "—"}</b>
-                  <span className="mono"><b>{r.aSets}–{r.bSets}</b> sets · {r.aPts}–{r.bPts} pts</span>
+                  <b style={{flex:"1 1 260px",color:"#111827"}}>{pa ? fullName(pa) : "—"} <span style={{color:"#475569"}}>vs</span> {pb ? fullName(pb) : "—"}</b>
+                  <span className="mono" style={{color:"#111827"}}><b>{r.aSets}–{r.bSets}</b> sets · {r.aPts}–{r.bPts} pts · Match pts {r.aMatchPts}–{r.bMatchPts}</span>
                   <button className="btn btn-tiny" onClick={()=>setExpandedFinished(x=>({...x,[m.id]:true}))}>View / Edit</button>
-                  <button className="btn btn-tiny btn-danger" onClick={() => removeMatch(m.id)}>Delete</button>
+                  <button className="btn btn-tiny" onClick={()=>{ setStatus(m.id, "live"); setExpandedFinished(x=>({...x,[m.id]:true})); }}>Reopen</button>
+                  <button className="btn btn-tiny btn-danger" onClick={() => { if (window.confirm("Delete this completed result and release the fixture to score again from fresh?")) removeMatch(m.id); }}>Delete Result</button>
                 </div>
               </section>
             );
@@ -5390,8 +5455,8 @@ function ScoringTab({ data, update, notify }) {
                     {m.status === "live" ? "Mark final" : m.status === "result_pending" ? "Waiting for result" : "Reopen"}
                   </button>
                   {r.complete ? <button className="btn btn-tiny" onClick={()=>setExpandedFinished(x=>({...x,[m.id]:false}))}>Collapse</button> : null}
-                  <button className="btn btn-tiny btn-danger" onClick={() => removeMatch(m.id)}>
-                    Delete
+                  <button className="btn btn-tiny btn-danger" onClick={() => { if (window.confirm("Delete this match/result and release the fixture to score again from fresh?")) removeMatch(m.id); }}>
+                    Delete Result
                   </button>
                 </div>
               </div>
@@ -5682,14 +5747,18 @@ function computeStandings(data, day, group = "all") {
     // Do not add any stored Adult/demo/import copies on top of that ledger; they can
     // otherwise make M / Sets W-L differ from the verified 12 matches per colour.
     // Kids Mixed records continue through the normal path below and remain intact.
-    if (useAdult19SepLedger && !matchIsKidsMixed(data, m)) return;
+    // The verified ledger replaces only Adult 19 Sep stored/import copies.
+    // Adult matches from 20 Sep onward must continue accumulating normally.
+    if (useAdult19SepLedger && !matchIsKidsMixed(data, m) && String(m.date) === "2026-09-19") return;
     if (!wholeRun && m.date !== day) return;
     const matchKids = matchIsKidsMixed(data, m);
     if (group === "kids" && !matchKids) return;
     if (group === "adult" && matchKids) return;
     const r = matchResult(m);
-    // Standings are results-only: a live or Result Pending match earns nothing yet.
-    if (!r.complete) return;
+    // FINAL CHECK 20 SEP: standings count a match only after all 3 sets are complete
+    // AND the match is Final. Reopen immediately removes it from today's standings
+    // until it is completed/finalised again.
+    if (!r.complete || String(m.status || "final") !== "final") return;
     const teamAId = resolveMatchTeamId(data, m, "a");
     const teamBId = resolveMatchTeamId(data, m, "b");
 
@@ -5713,7 +5782,11 @@ function computeStandings(data, day, group = "all") {
     };
     const A = standingRowForSide(teamAId, m.teamA, m.playerA);
     const B = standingRowForSide(teamBId, m.teamB, m.playerB);
-    if (!A || !B || String(A.id) === String(B.id)) return;
+    if (!A || !B) return;
+    // A same-colour practice/test match has a valid individual result, but must not
+    // add and subtract points inside the same team row. Official league fixtures are
+    // between different colours.
+    if (String(A.id) === String(B.id)) return;
 
     A.played++; B.played++;
     A.setsWon += r.aSets; B.setsWon += r.bSets;
@@ -5744,7 +5817,7 @@ function computeStandings(data, day, group = "all") {
      Invariants: every colour P=12; W+L=12; SetsW+SetsL=36;
      all colours together SetsW=72 and SetsL=72.
      Keep WC/manual bonus OUT of these base columns. */
-  if (useAdult19SepLedger) {
+  if (String(day) === "2026-09-19") {
     const canonicalAdult = {
       red:    { played:12, matchWins:9, matchLosses:3, setsWon:28, setsLost:8,  setPoints:140, matchPoints:225 },
       blue:   { played:12, matchWins:7, matchLosses:5, setsWon:20, setsLost:16, setPoints:100, matchPoints:175 },
@@ -5840,79 +5913,64 @@ function computeJuniorStandings(data, cat, day) {
 
 function StandingsTab({ data, update, notify }) {
   const [ageFilter, setAgeFilter] = useState("adult");
-  const table = useStandings(data, ageFilter);
-  const columns = [
-    "Rank","Team","Matches","Sets W-L","Set Points",
-    "Match Wins","Match Losses","Match Points (25 each)",
-    "Wild Cards Used","Wild Card Bonus (manual)","Total Points",
-  ];
-  const wcText = (w) => !w ? "Left" : w.won === true ? "Used · Won" : w.won === false ? "Used · Lost" : "Active";
-  const rows = table.map((t, i) => {
-    const cards = [t.wc1,t.wc2,t.wc3];
-    const cardMini = cards.map((w, idx) => {
-      if (!w) return `WC${idx+1}: Left`;
-      return `WC${idx+1}: ${w.won === true ? "Won" : w.won === false ? "Lost" : "Active"}`;
-    }).join(" · ");
-    return [
-      i + 1, t.name, t.played, `${t.setsWon}-${t.setsLost}`, t.setPoints,
-      t.matchWins, t.matchLosses, t.matchPoints,
-      `${t.wcUsed} / 9`,
-      t.manualBonus || "", t.points,
-    ];
-  });
-  const top = table[0];
 
-  const wcUsedDetails = (t) => {
-    const used = [t.wc1,t.wc2,t.wc3].filter(Boolean);
-    if (!used.length) return "No Wild Card used yet.";
-    return used.map((w) => {
-      const name =
-        w.card === "wc1" ? `WC1 — ${w.detail || "Forehand / Backhand"}` :
-        w.card === "wc2" ? "WC2 — Race to 7" :
-        "WC3 — Caller starts +5";
-      const result = w.won === true ? "Won (+20)" : w.won === false ? "Lost (+0)" : "Active";
-      return `${name} · Set ${w.set} · ${result}`;
-    }).join(" | ");
-  };
+  /* DAY 2 STANDINGS SAFE — 20 Sep 2026
+     Display rule requested by organizer:
+     - Day 1 is ONE carry-forward score column only.
+     - Day 2 shows the full Day-1-style scoring breakdown.
+     - Day 2 Total is shown after those columns.
+     - TOTAL is Day 1 + Day 2 Total.
+     - Adults and Kids Mixed remain completely separate.
+     - Wild Card (used/9) is intentionally not displayed; only manual WC Bonus remains. */
+  const currentDay = "2026-09-20";
+  const previousDay = "2026-09-19";
+  const day2 = computeStandings(data, currentDay, ageFilter);
+  const day1 = computeStandings(data, previousDay, ageFilter);
 
-  const wcRemainingCards = (t) => {
-    const opponents = (data.teams || []).filter(o => String(o.id) !== String(t.id));
-    const details = opponents.map(o => `${o.name}: ${Number((t.wcVs || {})[o.id] || 0)} / 3`).join(" · ");
-    return (
-      <div className="wc-visual-wrap" title={details || "Wild Card usage"}>
-        <button type="button" className="wc-used-link" onClick={() => notify(details || "No Wild Card used yet.")}>
-          <b>{t.wcUsed} / 9 used</b> · {t.wcLeft} left ⓘ
-        </button>
-      </div>
-    );
+  // Adult Day 1 final carry-forward totals approved after Day 1, including its WC bonus.
+  const adultDay1Carry = { red:395, blue:295, orange:250, black:100 };
+  const day1Carry = (team) => {
+    const key = String(team.name || "").trim().toLowerCase();
+    if (ageFilter === "adult" && adultDay1Carry[key] != null) return adultDay1Carry[key];
+    const r = day1.find(x => String(x.id) === String(team.id)) ||
+              day1.find(x => String(x.name||"").trim().toLowerCase() === key);
+    // Existing data.bonuses belongs to the completed Day 1 ledger. Carry it forward
+    // for Kids Mixed as part of Day 1; never leak it into today's Day 2 columns.
+    const day1Bonus = Number((data.bonuses || {})[team.id] || 0);
+    return r ? Number(r.setPoints || 0) + Number(r.matchPoints || 0) + day1Bonus : day1Bonus;
   };
+  // Day 2 bonuses are date-scoped. This deliberately starts blank/zero even when
+  // yesterday's data.bonuses contains Day 1 WC awards (the old 30/20/20/10 values).
+  const day2Bonus = (team) => Number((((data.dailyBonuses || {})[currentDay]) || {})[team.id] || 0);
+  const day2Total = (team) => Number(team.setPoints || 0) + Number(team.matchPoints || 0) + day2Bonus(team);
+  const cumulativeTotal = (team) => day1Carry(team) + day2Total(team);
+
+  const ranked = day2.slice().sort((a,b) => cumulativeTotal(b) - cumulativeTotal(a) || String(a.name).localeCompare(String(b.name)));
+  const top = ranked[0];
 
   const latestTeamSetScores = (teamId) => {
     const matches = (data.matches || [])
       .filter((m) => {
+        if (String(m.date || "") !== currentDay) return false;
+        if (ageFilter === "kids" && !matchIsKidsMixed(data, m)) return false;
+        if (ageFilter === "adult" && matchIsKidsMixed(data, m)) return false;
         const r = matchResult(m);
-        return r.complete && (String(resolveMatchTeamId(data, m, "a")) === String(teamId) || String(resolveMatchTeamId(data, m, "b")) === String(teamId));
+        return r.complete && String(m.status || "final") === "final" && (String(resolveMatchTeamId(data, m, "a")) === String(teamId) || String(resolveMatchTeamId(data, m, "b")) === String(teamId));
       })
       .slice()
-      .sort((a,b) => String(b.completedAt || b.date || b.id || "").localeCompare(String(a.completedAt || a.date || a.id || "")));
-
+      .sort((a,b) => String(b.completedAt || b.id || "").localeCompare(String(a.completedAt || a.id || "")));
     const m = matches[0];
     if (!m) return <span className="muted">—</span>;
-
     const side = String(resolveMatchTeamId(data, m, "a")) === String(teamId) ? "a" : "b";
     return (
-      <div className="set-score-list" title="Latest completed match set scores">
-        {(m.sets || []).map((s, idx) => {
+      <div className="set-score-list" title="Latest completed Day 2 match set scores">
+        {(m.sets || []).map((set, idx) => {
           if (!setDoneForMatch(m, idx)) return null;
-          const a = Number(s.a || 0), b = Number(s.b || 0);
+          const a = Number(set.a || 0), b = Number(set.b || 0);
           const mine = side === "a" ? a : b;
           const opp = side === "a" ? b : a;
           const won = mine > opp;
-          return (
-            <span className={`set-score-pill ${won ? "won" : "lost"}`} key={idx}>
-              {mine}–{opp}
-            </span>
-          );
+          return <span className={`set-score-pill ${won ? "won" : "lost"}`} key={idx}>{mine}–{opp}</span>;
         })}
       </div>
     );
@@ -5921,28 +5979,43 @@ function StandingsTab({ data, update, notify }) {
   const setBonus = (teamId, value) => {
     const v = value.trim();
     update((d) => {
-      const bonuses = { ...(d.bonuses || {}) };
-      if (v === "") delete bonuses[teamId];
-      else bonuses[teamId] = Number(v) || 0;
-      return { ...d, bonuses };
+      const dailyBonuses = { ...(d.dailyBonuses || {}) };
+      const today = { ...(dailyBonuses[currentDay] || {}) };
+      if (v === "") delete today[teamId];
+      else today[teamId] = Number(v) || 0;
+      dailyBonuses[currentDay] = today;
+      return { ...d, dailyBonuses };
     });
   };
+
+  const columns = [
+    "Rank","Team","Day 1 Total","Day 2 Matches","Day 2 Sets W-L","Day 2 Set Points",
+    "Day 2 Match Wins","Day 2 Match Losses","Day 2 Match Points","Day 2 WC Bonus",
+    "Day 2 Total","Cumulative Total"
+  ];
+  const rows = ranked.map((t,i) => [
+    i+1, t.name, day1Carry(t), t.played, `${t.setsWon}-${t.setsLost}`, t.setPoints,
+    t.matchWins, t.matchLosses, t.matchPoints, day2Bonus(t) || "", day2Total(t), cumulativeTotal(t)
+  ]);
 
   const onImport = (objs) => {
     let n = 0;
     update((d) => {
-      const bonuses = { ...(d.bonuses || {}) };
+      const dailyBonuses = { ...(d.dailyBonuses || {}) };
+      const bonuses = { ...(dailyBonuses[currentDay] || {}) };
       objs.forEach((o) => {
         const name = pick(o, ["team", "team name"]);
         const b = pick(o, ["bonus", "bonus points", "extra"]);
-        const t = d.teams.find((x) => x.name.toLowerCase() === name.toLowerCase());
+        const pool = (d.teams || []).filter(t => ageFilter === "kids" ? (String(t.ageGroup||"").toLowerCase()==="kids" || String(t.id||"").startsWith("kids-")) : !(String(t.ageGroup||"").toLowerCase()==="kids" || String(t.id||"").startsWith("kids-")));
+        const t = pool.find((x) => String(x.name||"").toLowerCase() === String(name||"").toLowerCase());
         if (!t || b === "") return;
         bonuses[t.id] = Number(b) || 0;
         n++;
       });
-      return { ...d, bonuses };
+      dailyBonuses[currentDay] = bonuses;
+      return { ...d, dailyBonuses };
     });
-    notify(`${n} bonus values applied.`);
+    notify(`${n} Day 2 bonus values applied.`);
   };
 
   return (
@@ -5950,48 +6023,39 @@ function StandingsTab({ data, update, notify }) {
       <section className="card">
         <header className="card-head">
           <div>
-            <span className="eyebrow">Work group</span>
-            <h2>Standings · scores + Wild Cards</h2>
+            <span className="eyebrow">20 Sep · Day 2</span>
+            <h2>{ageFilter === "kids" ? "Kids Mixed — Day 2 Standings" : "Adults — Day 2 Standings"}</h2>
             <div className="standings-formula">
-              Adult standings update from completed Adult Live Scoring results: set wins × 5 + match wins × 25. Wild Card bonus stays editable and re-ranks immediately. Kids Mixed remains separate
+              Day 1 is carried forward as one score. Every Day 2 scoring column is shown in full. Cumulative Total = Day 1 Total + Day 2 Total.
             </div>
           </div>
           <select value={ageFilter} onChange={(e) => setAgeFilter(e.target.value)}>
-            <option value="adult">Adults only</option>
+            <option value="adult">Adults</option>
             <option value="kids">Kids Mixed</option>
           </select>
         </header>
       </section>
 
-      <>
-      <DataBar
-        name="standings"
-        columns={columns}
-        rows={rows}
-        onImport={onImport}
-        note="Adults: WC1, WC2 and WC3 may each be used once against each opponent (9 total in a 4-team league). One player may use only one Wild Card in the entire League, and only one Wild Card is allowed in an individual match. Kids: WC1, WC2 and WC3 may each be used only once in the entire League (3 total). Wild Card winner bonus remains +20."
-        notify={notify}
-      />
+      <DataBar name="standings" columns={columns} rows={rows} onImport={onImport}
+        note="Day 1 is one carry-forward column. Day 2 shows full scoring. Wild Card Used/9 is removed; only the manual Day 2 WC Bonus is shown." notify={notify} />
 
-      {table.length === 0 ? (
-        <Empty title="No teams to rank" body="Create teams and play a match to build the table." />
+      {ranked.length === 0 ? (
+        <Empty title="No teams to rank" body="Complete Day 2 matches to build today's standings." />
       ) : (
         <>
-          {top && top.points > 0 ? (
+          {top ? (
             <section className="leader">
-              <span className="databar-tag">Leading</span>
+              <span className="databar-tag">Cumulative leader</span>
               <h2>{top.name}</h2>
-              <div className="leader-num mono">{top.points}</div>
-              <span className="muted">
-                {top.matchWins} match {top.matchWins === 1 ? "win" : "wins"} · {top.setsWon} sets won
-              </span>
+              <div className="leader-num mono">{cumulativeTotal(top)}</div>
+              <span className="muted">Day 1 {day1Carry(top)} + Day 2 {day2Total(top)}</span>
             </section>
           ) : null}
 
           <section className="card">
             <header className="card-head">
-              <h2>{ageFilter === "kids" ? "Kids Mixed — Colour Team Standings" : "Adults — Live Score Colour Team Standings"}</h2>
-              <span className="muted">5 per set won · 25 per match win · Wild Card blank until referee enters bonus</span>
+              <h2>{ageFilter === "kids" ? "Kids Mixed — Day 2 + Cumulative" : "Adults — Day 2 + Cumulative"}</h2>
+              <span className="muted">Day 2: 5 per set win · 25 per match win · WC Bonus manual</span>
             </header>
             <div className="table-scroll">
               <table className="standings">
@@ -5999,48 +6063,40 @@ function StandingsTab({ data, update, notify }) {
                   <tr>
                     <th>#</th>
                     <th>Team</th>
-                    <th title="Matches played">M</th>
-                    <th title="Sets won–lost">Sets</th>
-                    <th title="Latest completed match: score in each set">Set Scores</th>
-                    <th title="5 points for every set won">Set Pts</th>
-                    <th title="Matches won">Match W</th>
-                    <th title="Matches lost">Match L</th>
-                    <th title="25 points for every match won">Match pts</th>
-                    <th title="3 Wild Cards against each of 3 opponents = 9 total"><span className="wc-head">Wild Cards <span className="muted small">(used / 9)</span></span></th>
-                    <th title="Editable referee Wild Card bonus; leave blank unless referee awards it">Wild Card Bonus</th>
-                    <th>Total</th>
+                    <th title="Final score carried forward from 19 Sep">Day 1<br/><span className="muted small">19 Sep</span></th>
+                    <th title="Day 2 matches played">M</th>
+                    <th title="Day 2 sets won–lost">Sets W–L</th>
+                    <th title="Latest completed Day 2 match set scores">Set Scores</th>
+                    <th title="Day 2: 5 points per set won">Set Pts</th>
+                    <th title="Day 2 matches won">Match W</th>
+                    <th title="Day 2 matches lost">Match L</th>
+                    <th title="Day 2: 25 points per match won">Match Pts</th>
+                    <th title="Manual Day 2 Wild Card bonus">WC Bonus</th>
+                    <th title="Day 2 Set Pts + Match Pts + WC Bonus">Day 2<br/>Total</th>
+                    <th title="Day 1 + Day 2">TOTAL</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {table.map((t, i) => (
+                  {ranked.map((t, i) => (
                     <tr key={t.id} className={i === 0 ? "first" : ""}>
                       <td className="mono rank">{i + 1}</td>
                       <td className="strong">{t.name}</td>
+                      <td className="mono total">{day1Carry(t)}</td>
                       <td className="mono">{t.played}</td>
-                      <td className="mono">
-                        <span className="set-record" title={`${t.setsWon} sets won · ${t.setsLost} sets lost`}>
-                          <span className={t.setsWon > t.setsLost ? "set-record-winner" : ""}>{t.setsWon}</span>
-                          <span className="set-record-dash">–</span>
-                          <span className={t.setsLost > t.setsWon ? "set-record-winner" : ""}>{t.setsLost}</span>
-                        </span>
-                      </td>
+                      <td className="mono"><span className="set-record"><span>{t.setsWon}</span><span className="set-record-dash">–</span><span>{t.setsLost}</span></span></td>
                       <td>{latestTeamSetScores(t.id)}</td>
                       <td className="mono">{t.setPoints}</td>
                       <td className="mono">{t.matchWins}</td>
                       <td className="mono muted">{t.matchLosses}</td>
                       <td className="mono">{t.matchPoints}</td>
-                      <td>{wcRemainingCards(t)}</td>
                       <td>
-                        <input
-                          className="mono bonus-input"
-                          inputMode="numeric"
-                          value={(data.bonuses || {})[t.id] == null ? "" : String(data.bonuses[t.id])}
-                          onChange={(e) => setBonus(t.id, e.target.value)}
-                          placeholder="—"
-                          aria-label={"Manual Wild Card bonus points for " + t.name}
-                        />
+                        <input className="mono bonus-input" inputMode="numeric"
+                          value={(((data.dailyBonuses || {})[currentDay]) || {})[t.id] == null ? "" : String((((data.dailyBonuses || {})[currentDay]) || {})[t.id])}
+                          onChange={(e) => setBonus(t.id, e.target.value)} placeholder="—"
+                          aria-label={"Day 2 Wild Card bonus points for " + t.name} />
                       </td>
-                      <td className="mono total">{t.points}</td>
+                      <td className="mono total">{day2Total(t)}</td>
+                      <td className="mono total"><b>{cumulativeTotal(t)}</b></td>
                     </tr>
                   ))}
                 </tbody>
@@ -6049,62 +6105,10 @@ function StandingsTab({ data, update, notify }) {
           </section>
         </>
       )}
-
-      </>
-
-      {false && ageFilter === "kids" ? KID_CATEGORIES.map((cat) => {
-        const jr = computeJuniorStandings(data, cat, "all");
-        if (!jr.length) return null;
-        return (
-          <section className="card" key={cat}>
-            <header className="card-head">
-              <h2>{catLabel(cat)} standings</h2>
-              <span className="muted">Individual · separate from the team table</span>
-            </header>
-            <div className="table-scroll">
-              <table className="standings">
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Player</th>
-                    <th>P</th>
-                    <th>Sets W–L</th>
-                    <th>Set pts</th>
-                    <th>Match W</th>
-                    <th>Match pts</th>
-                    <th>Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {jr.map((t, i) => (
-                    <tr key={t.id} className={i === 0 ? "first" : ""}>
-                      <td className="mono rank">{i + 1}</td>
-                      <td className="strong">{t.name}</td>
-                      <td className="mono">{t.played}</td>
-                      <td className="mono">
-                        {t.setsWon}–{t.setsLost}
-                      </td>
-                      <td className="mono">{t.setPoints}</td>
-                      <td className="mono">{t.matchWins}</td>
-                      <td className="mono">{t.matchPoints}</td>
-                      <td className="mono total">{t.points}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        );
-      }) : null}
     </div>
   );
 }
 
-/* ============================================================
-   Player performance
-   ============================================================ */
-
-/* Pass a date to score just that day, or "all" for the whole tournament. */
 function playerStats(data, pid, day) {
   let played = 0;
   let won = 0;
@@ -10928,6 +10932,26 @@ function applyAdultResults20260919(state) {
   };
 }
 
+function repairOfficialFixtureIntegrity(state) {
+  if (!state || !Array.isArray(state.fixtures) || !Array.isArray(state.teams)) return state;
+  // 20 Sep tournament integrity repair: one Kids fixture quartet accidentally used
+  // Adult-Black player Avinash Agarwal instead of Kids-Black Vivaan Agrawal.
+  // Replace only those three accepted Kids fixtures; do not touch historical matches.
+  const VIVAAN_AGRAWAL = "sxe4ad6h";
+  const AVINASH_AGARWAL = "hgmwpqkn";
+  const kidsBlack = state.teams.find(t => String(t.ageGroup||"").toLowerCase()==="kids" && String(t.name||"").toLowerCase()==="black");
+  let changed=false;
+  const fixtures=state.fixtures.map(f=>{
+    if (!(f && f.official===true && f.fixtureGroup==="kids" && (f.playerA===AVINASH_AGARWAL || f.playerB===AVINASH_AGARWAL))) return f;
+    changed=true;
+    const x={...f};
+    if(x.playerA===AVINASH_AGARWAL){ x.playerA=VIVAAN_AGRAWAL; if(kidsBlack) x.teamA=kidsBlack.id; }
+    if(x.playerB===AVINASH_AGARWAL){ x.playerB=VIVAAN_AGRAWAL; if(kidsBlack) x.teamB=kidsBlack.id; }
+    return x;
+  });
+  return changed ? {...state,fixtures,fixtureIntegrityRepair20260920:true} : state;
+}
+
 function App() {
   const [data, setData] = useState(EMPTY);
   const [ready, setReady] = useState(false);
@@ -10954,7 +10978,7 @@ function App() {
       } catch (e) {
         /* first run — no saved data */
       }
-      const next = { ...EMPTY, ...(saved || {}) };
+      let next = repairOfficialFixtureIntegrity({ ...EMPTY, ...(saved || {}) });
       try {
   const playerRows = await loadPlayersFromSupabase();
   const calibrationRows = await loadCalibrationsFromSupabase();
@@ -11013,7 +11037,7 @@ setData(next);
         if (res && res.stamp) mark.current = res.stamp;
         if (res && res.value && res.value !== stamp.current) {
           stamp.current = res.value;
-          const fresh = { ...EMPTY, ...JSON.parse(res.value) };
+          let fresh = repairOfficialFixtureIntegrity({ ...EMPTY, ...JSON.parse(res.value) });
 
 try {
   const playerRows = await loadPlayersFromSupabase();
@@ -11060,6 +11084,15 @@ setData(fresh);
       document.removeEventListener("visibilitychange", pull);
     };
   }, [ready]);
+
+  /* Persist the verified 3-opponent Kids fixture repair once so every device sees the same schedule. */
+  useEffect(() => {
+    if (!ready || !data || !data.fixtureIntegrityRepair20260920) return;
+    const json = JSON.stringify(data);
+    stamp.current = json;
+    try { localStorage.setItem(STORE_KEY, json); } catch(e) {}
+    Promise.resolve(window.storage.set(STORE_KEY, json)).catch(e => console.error("Fixture integrity repair save failed", e));
+  }, [ready, data && data.fixtureIntegrityRepair20260920]);
 
   /* One-time 19 Sep adult result import. It updates only the supplied Adult fixtures;
      Kids scores/results remain byte-for-byte untouched in state. */
@@ -11795,12 +11828,14 @@ function Styles() {
 /* ===== Mobile referee scoring — phone-first safe view ===== */
 @media (max-width:720px){
   .desktop-match-setup{display:none !important;}
-  .mobile-finished-board{display:none !important;}
+  /* 20 Sep tournament-safe mobile: completed matches stay visible so Admin can verify, reopen or delete/re-score. */
+  .mobile-finished-board{display:block !important;}
   .mobile-search-actions{display:flex;align-items:center;gap:8px;width:100%;justify-content:space-between;margin-top:8px;}
   .mobile-search-actions .btn{min-height:44px;min-width:92px;font-size:15px;}
   .mobile-score-board{border-radius:18px;overflow:hidden;}
   .mobile-score-board .board-top{padding:12px;gap:8px;}
-  .mobile-score-board .board-top-actions .btn-danger{display:none;}
+  /* Keep Delete Result visible on phone; confirmation protects against accidental taps. */
+  .mobile-score-board .board-top-actions .btn-danger{display:inline-flex;}
   .mobile-score-board .board-body{padding:12px;gap:8px;}
   .mobile-score-board .side-team{font-size:11px;}
   .mobile-score-board .side-player{font-size:17px;line-height:1.2;}
