@@ -25,6 +25,7 @@
 <!-- TT PULSE MOBILE + VERIFIED ADULT STANDINGS LOCK: 12 EACH / RED 28 / BLUE 20 / ORANGE 16 / BLACK 8 — 2026-09-20 -->
 <!-- TT PULSE MOBILE WC EDITABLE STANDINGS SAFE 2026-09-20 -->
 <!DOCTYPE html>
+<!-- 21 SEP 2026: 3-UNIQUE-OPPONENTS FIX. Live Scoring player search is selected-date only; duplicate pairing key includes date/category. Existing scores are untouched. -->
 <!-- VERIFIED 20 SEP MOBILE RESULT CONTROL: finished matches visible on phone; Reopen + confirmed Delete Result; Day-2 category standings remain date/group filtered. -->
 <!-- EXACT-NAME SAFE 20 SEP: player identity uses IDs; Annsh Kulai (lcpz2h8d) and Joy Verma (17kmhp7l) verified from backup. Robust delete/reopen; high-contrast finished results; 5/set + 25/match. Same-team practice tests remain excluded from TEAM standings to prevent corrupting Red-v-Red totals. -->
 <html lang="en">
@@ -4597,7 +4598,10 @@ function ScoringTab({ data, update, notify }) {
   const fixturePlayerPairKey = (f) => {
     const a = String(f.playerA || "").trim().toLowerCase();
     const b = String(f.playerB || "").trim().toLowerCase();
-    return [a,b].sort().join("||");
+    // A pairing is unique per tournament date/category, not globally across the event.
+    // This preserves legitimate fixtures on different dates while removing duplicate rows
+    // for the same two players on the same day.
+    return [String(f.date || ""), String(f.category || ""), ...[a,b].sort()].join("||");
   };
   const dedupedFixtureMap = new Map();
   [...groupOfficialFixturesRaw]
@@ -4660,11 +4664,11 @@ function ScoringTab({ data, update, notify }) {
     const hay = [teamById(f.teamA)?.name, teamById(f.teamB)?.name, f.slot, `T${f.hostTier || ""}`].filter(Boolean).join(" ").toLowerCase();
     return hay.includes(fixtureSearchText);
   };
-  // When searching a player, search ALL official fixtures in the selected group across every date.
-  // Without a search, keep the normal selected-date fixture board.
-  const searchPairingGroups = Array.from(groupOfficialFixtures.reduce((map,f)=>{
+  // Player search is date-specific. A player must see only the fixtures for the selected
+  // tournament date, so a 3-opponent round cannot appear as 6 rows by mixing two dates.
+  const searchPairingGroups = Array.from(dateFixturesAll.reduce((map,f)=>{
     if (!fixtureMatchesSearch(f)) return map;
-    const k=pairingKey(f);
+    const k=fixturePlayerPairKey(f);
     if(!map.has(k)) map.set(k,[]);
     map.get(k).push(f);
     return map;
@@ -4804,7 +4808,7 @@ function ScoringTab({ data, update, notify }) {
     }
     const m = {
       id: uid(),
-      date: ymd(new Date()),
+      date: effectiveScoringDate || scoringDate,
       teamA,
       teamB,
       playerA,
@@ -4815,7 +4819,7 @@ function ScoringTab({ data, update, notify }) {
         { a: "0", b: "0" },
       ],
       status: "live",
-      scorer: scorer || (dutyFor(ymd(new Date()))[0] || {}).name || "",
+      scorer: scorer || (dutyFor(effectiveScoringDate || scoringDate)[0] || {}).name || "",
       category: matchGroup === "kids" ? "Kids" : undefined,
       wildCards: { a: [], b: [] },
     };
@@ -5947,7 +5951,13 @@ function StandingsTab({ data, update, notify }) {
     const day = String(d.getDate()).padStart(2, "0");
     return `${y}-${m}-${day}`;
   };
-  const currentDay = isoLocalToday();
+  const wallClockToday = isoLocalToday();
+  // The active standings day is the latest date that actually has a completed match.
+  // Entering a historical result on 21 Sep must therefore remain under its fixture date (20 Sep).
+  const completedGroupDates = Array.from(new Set((data.matches || [])
+    .filter(m => (ageFilter === "kids" ? matchIsKidsMixed(data, m) : !matchIsKidsMixed(data, m)) && matchResult(m).complete)
+    .map(m => String(m.date || "")).filter(Boolean))).sort();
+  const currentDay = completedGroupDates.filter(d => d <= wallClockToday).slice(-1)[0] || wallClockToday;
   const prettyDay = (iso) => {
     const p = String(iso || "").split("-");
     if (p.length !== 3) return iso;
@@ -5960,7 +5970,7 @@ function StandingsTab({ data, update, notify }) {
     ...(data.matches || []).filter(isGroupRow).map(m => String(m.date || "")).filter(Boolean),
     ...(data.fixtures || []).filter(isGroupRow).map(f => String(f.date || "")).filter(Boolean),
     currentDay
-  ])).sort();
+  ])).filter(d => d <= currentDay).sort();
   const pastDates = tournamentDates.filter(d => d < currentDay);
 
   // 19 Sep was manually audited match-by-match and is preserved as the final historical day score.
@@ -10946,15 +10956,40 @@ function applyAdultResults20260919(state) {
 }
 
 function repairOfficialFixtureIntegrity(state) {
-  if (!state || !Array.isArray(state.fixtures) || !Array.isArray(state.teams)) return state;
+  if (!state || !Array.isArray(state.fixtures)) return state;
+
+  let changed = false;
+  let fixtures = state.fixtures;
+  let matches = Array.isArray(state.matches) ? state.matches : [];
+
+  // Tournament fact: no matches were played on 21 Sep 2026. Kids Mixed results
+  // entered on 21 Sep were score-entry work for the 20 Sep fixtures. Normalize
+  // this on EVERY load/cloud refresh so a stale remote copy cannot bring 21 Sep back.
+  const movedKidsMatchIds = new Set();
+  matches = matches.map(m => {
+    if (String(m.date || "") === "2026-09-21" && matchIsKidsMixed(state, m)) {
+      changed = true;
+      movedKidsMatchIds.add(String(m.id));
+      return { ...m, date:"2026-09-20", correctedFromDate:"2026-09-21" };
+    }
+    return m;
+  });
+  if (movedKidsMatchIds.size) {
+    fixtures = fixtures.map(f => {
+      if (f.matchId && movedKidsMatchIds.has(String(f.matchId))) {
+        changed = true;
+        return { ...f, date:"2026-09-20" };
+      }
+      return f;
+    });
+  }
+
   // 20 Sep tournament integrity repair: one Kids fixture quartet accidentally used
   // Adult-Black player Avinash Agarwal instead of Kids-Black Vivaan Agrawal.
-  // Replace only those three accepted Kids fixtures; do not touch historical matches.
   const VIVAAN_AGRAWAL = "sxe4ad6h";
   const AVINASH_AGARWAL = "hgmwpqkn";
-  const kidsBlack = state.teams.find(t => String(t.ageGroup||"").toLowerCase()==="kids" && String(t.name||"").toLowerCase()==="black");
-  let changed=false;
-  const fixtures=state.fixtures.map(f=>{
+  const kidsBlack = (state.teams || []).find(t => String(t.ageGroup||"").toLowerCase()==="kids" && String(t.name||"").toLowerCase()==="black");
+  fixtures = fixtures.map(f=>{
     if (!(f && f.official===true && f.fixtureGroup==="kids" && (f.playerA===AVINASH_AGARWAL || f.playerB===AVINASH_AGARWAL))) return f;
     changed=true;
     const x={...f};
@@ -10962,7 +10997,14 @@ function repairOfficialFixtureIntegrity(state) {
     if(x.playerB===AVINASH_AGARWAL){ x.playerB=VIVAAN_AGRAWAL; if(kidsBlack) x.teamB=kidsBlack.id; }
     return x;
   });
-  return changed ? {...state,fixtures,fixtureIntegrityRepair20260920:true} : state;
+
+  return changed ? {
+    ...state,
+    matches,
+    fixtures,
+    fixtureIntegrityRepair20260920:true,
+    kidsDateCorrection20260921:true
+  } : state;
 }
 
 function App() {
@@ -11033,6 +11075,9 @@ setData(next);
     })();
   }, []);
 
+  /* Date normalization is handled inside repairOfficialFixtureIntegrity on every
+     initial load and every cloud refresh, preventing stale 21 Sep Kids records. */
+
   /* Referees score on one phone, everyone else watches on theirs. Ask the
      store how fresh it is; only fetch the whole tournament when the answer
      has changed. With Supabase filled in that is a live feed across
@@ -11083,6 +11128,12 @@ try {
 }
 
 setData(fresh);
+          const repairedJson = JSON.stringify(fresh);
+          if (repairedJson !== res.value) {
+            stamp.current = repairedJson;
+            try { localStorage.setItem(STORE_KEY, repairedJson); } catch(e) {}
+            Promise.resolve(window.storage.set(STORE_KEY, repairedJson)).catch(e => console.error("Normalized tournament date save failed", e));
+          }
         }
       } catch (e) {
         /* nothing saved yet */
