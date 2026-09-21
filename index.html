@@ -1,3 +1,6 @@
+<!-- LIVE SCORE -> STANDINGS FIX 21 SEP 2026: Adult-only 19-Sep canonical guard; robust player/team colour attribution; fixtures and scores unchanged. -->
+<!-- DYNAMIC DAILY STANDINGS UPDATE 21 SEP 2026: past days collapse to one score; current date shows W/L, points, editable WC, day total and cumulative. -->
+<!-- STANDINGS RECONCILIATION 21 SEP 2026: Kids 19 Sep corrected from verified set-by-set scores; 20 Sep team attribution resolves through player membership; scores/fixtures untouched. -->
 <!-- APPLY TODAY 20 SEP 2026: audited basic scoring = 5/set + 25/match; final-only Day2 standings; Adult/Kids separated; duplicate fixtures filtered; mobile Reopen/Delete retained. -->
 <!-- DAY-BY-DAY CUMULATIVE STANDINGS SAFE 2026-09-20 -->
 <!-- FINAL CHECKED BEFORE GITHUB 20 SEP 2026: duplicate fixture pairs filtered; Day-2 final-only standings; Reopen removes points until re-finalised. -->
@@ -851,7 +854,7 @@ function setWinnerForMatch(m, setIndex) {
      engine now uses normal first-to-11 rules. For the imported 19 Sep Adult
      results, trust the recorded final set score and derive only the winner.
      No automatic Wild Card bonus is restored. */
-  if (m.importedAdultSheet20260919 || m.entryMode === "adult-sheet-import") {
+  if (m.importedAdultSheet20260919 || m.entryMode === "adult-sheet-import" || m.entryMode === "result-sheet-import-2026-09-20") {
     const a = num(s.a), b = num(s.b);
     if (a === b || (a === 0 && b === 0)) return null;
     return a > b ? "a" : "b";
@@ -5768,6 +5771,18 @@ function computeStandings(data, day, group = "all") {
     // This changes only attribution in Standings; stored match scores/results stay untouched.
     const standingRowForSide = (resolvedId, rawTeam, playerId) => {
       if (byId[resolvedId]) return byId[resolvedId];
+      // Resolve from the player's saved membership across ALL stored teams first.
+      // Then map that membership by colour into the active Adult/Kids standings pool.
+      // This keeps historical/imported team ids from dropping valid live-score points.
+      const storedMemberTeam = (data.teams || []).find(t => (t.playerIds || []).some(x => String(x) === String(playerId)));
+      if (storedMemberTeam) {
+        if (byId[storedMemberTeam.id]) return byId[storedMemberTeam.id];
+        const storedColour = String(storedMemberTeam.name || "").toLowerCase().match(/\b(red|blue|orange|black)\b/);
+        if (storedColour) {
+          const mapped = teamPool.find(t => String(t.name || "").toLowerCase().includes(storedColour[1]));
+          if (mapped && byId[mapped.id]) return byId[mapped.id];
+        }
+      }
       const memberTeam = teamPool.find(t => (t.playerIds || []).some(x => String(x) === String(playerId)));
       if (memberTeam && byId[memberTeam.id]) return byId[memberTeam.id];
       const rawText = String(rawTeam == null ? "" : rawTeam).trim().toLowerCase();
@@ -5817,7 +5832,10 @@ function computeStandings(data, day, group = "all") {
      Invariants: every colour P=12; W+L=12; SetsW+SetsL=36;
      all colours together SetsW=72 and SetsL=72.
      Keep WC/manual bonus OUT of these base columns. */
-  if (String(day) === "2026-09-19") {
+  // CRITICAL FIX 21 SEP 2026: apply the audited Adult 19-Sep canonical ledger
+  // ONLY to Adult standings. Previously this block also matched Kids team names
+  // (Red/Blue/Orange/Black) and could overwrite correctly calculated Kids totals.
+  if (String(day) === "2026-09-19" && group !== "kids") {
     const canonicalAdult = {
       red:    { played:12, matchWins:9, matchLosses:3, setsWon:28, setsLost:8,  setPoints:140, matchPoints:225 },
       blue:   { played:12, matchWins:7, matchLosses:5, setsWon:20, setsLost:16, setPoints:100, matchPoints:175 },
@@ -5914,67 +5932,76 @@ function computeJuniorStandings(data, cat, day) {
 function StandingsTab({ data, update, notify }) {
   const [ageFilter, setAgeFilter] = useState("adult");
 
-  /* DAY 2 STANDINGS SAFE — 20 Sep 2026
-     Display rule requested by organizer:
-     - Day 1 is ONE carry-forward score column only.
-     - Day 2 shows the full Day-1-style scoring breakdown.
-     - Day 2 Total is shown after those columns.
-     - TOTAL is Day 1 + Day 2 Total.
-     - Adults and Kids Mixed remain completely separate.
-     - Wild Card (used/9) is intentionally not displayed; only manual WC Bonus remains. */
-  const currentDay = "2026-09-20";
-  const previousDay = "2026-09-19";
-  const day2 = computeStandings(data, currentDay, ageFilter);
-  const day1 = computeStandings(data, previousDay, ageFilter);
+  /* DYNAMIC DAILY STANDINGS — 21 Sep 2026
+     Organizer rule:
+     - Every completed/past tournament date collapses to ONE locked daily-score column.
+     - The current date alone shows Sets W/L, Match W/L, WC Bonus and Current Day Total.
+     - Current Day Total = Set Points + Match Points + editable WC Bonus.
+     - Cumulative Total = all previous daily totals + Current Day Total.
+     - Adults and Kids Mixed remain separate. */
 
-  // Adult Day 1 final carry-forward totals approved after Day 1, including its WC bonus.
-  const adultDay1Carry = { red:395, blue:295, orange:250, black:100 };
-  const day1Carry = (team) => {
-    const key = String(team.name || "").trim().toLowerCase();
-    if (ageFilter === "adult" && adultDay1Carry[key] != null) return adultDay1Carry[key];
-    const r = day1.find(x => String(x.id) === String(team.id)) ||
-              day1.find(x => String(x.name||"").trim().toLowerCase() === key);
-    // Existing data.bonuses belongs to the completed Day 1 ledger. Carry it forward
-    // for Kids Mixed as part of Day 1; never leak it into today's Day 2 columns.
-    const day1Bonus = Number((data.bonuses || {})[team.id] || 0);
-    return r ? Number(r.setPoints || 0) + Number(r.matchPoints || 0) + day1Bonus : day1Bonus;
+  const isoLocalToday = () => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
   };
-  // Day 2 bonuses are date-scoped. This deliberately starts blank/zero even when
-  // yesterday's data.bonuses contains Day 1 WC awards (the old 30/20/20/10 values).
-  const day2Bonus = (team) => Number((((data.dailyBonuses || {})[currentDay]) || {})[team.id] || 0);
-  const day2Total = (team) => Number(team.setPoints || 0) + Number(team.matchPoints || 0) + day2Bonus(team);
-  const cumulativeTotal = (team) => day1Carry(team) + day2Total(team);
+  const currentDay = isoLocalToday();
+  const prettyDay = (iso) => {
+    const p = String(iso || "").split("-");
+    if (p.length !== 3) return iso;
+    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    return `${Number(p[2])} ${months[Number(p[1]) - 1] || p[1]}`;
+  };
 
-  const ranked = day2.slice().sort((a,b) => cumulativeTotal(b) - cumulativeTotal(a) || String(a.name).localeCompare(String(b.name)));
+  const isGroupRow = (m) => ageFilter === "kids" ? matchIsKidsMixed(data, m) : !matchIsKidsMixed(data, m);
+  const tournamentDates = Array.from(new Set([
+    ...(data.matches || []).filter(isGroupRow).map(m => String(m.date || "")).filter(Boolean),
+    ...(data.fixtures || []).filter(isGroupRow).map(f => String(f.date || "")).filter(Boolean),
+    currentDay
+  ])).sort();
+  const pastDates = tournamentDates.filter(d => d < currentDay);
+
+  // 19 Sep was manually audited match-by-match and is preserved as the final historical day score.
+  const locked19Sep = ageFilter === "adult"
+    ? { red:395, blue:295, orange:250, black:100 }
+    : { red:260, blue:200, orange:125, black:135 };
+
+  const statsByDate = {};
+  tournamentDates.forEach(d => { statsByDate[d] = computeStandings(data, d, ageFilter); });
+
+  // Build a stable team list even when the current day has not started yet.
+  const teamMap = new Map();
+  tournamentDates.forEach(d => (statsByDate[d] || []).forEach(t => {
+    const key = String(t.id || t.name || "");
+    if (key && !teamMap.has(key)) teamMap.set(key, { id:t.id, name:t.name });
+  }));
+  const teams = Array.from(teamMap.values());
+
+  const rowFor = (date, team) => (statsByDate[date] || []).find(t =>
+    String(t.id) === String(team.id) || String(t.name || "").trim().toLowerCase() === String(team.name || "").trim().toLowerCase()
+  ) || { id:team.id, name:team.name, played:0, setsWon:0, setsLost:0, setPoints:0, matchWins:0, matchLosses:0, matchPoints:0 };
+
+  const bonusFor = (date, team) => Number((((data.dailyBonuses || {})[date]) || {})[team.id] || 0);
+  const calculatedDayTotal = (date, team) => {
+    const r = rowFor(date, team);
+    return Number(r.setPoints || 0) + Number(r.matchPoints || 0) + bonusFor(date, team);
+  };
+  const historicalDayTotal = (date, team) => {
+    if (date === "2026-09-19") {
+      const key = String(team.name || "").trim().toLowerCase();
+      if (locked19Sep[key] != null) return locked19Sep[key];
+    }
+    return calculatedDayTotal(date, team);
+  };
+  const previousTotal = (team) => pastDates.reduce((sum, d) => sum + historicalDayTotal(d, team), 0);
+  const currentRow = (team) => rowFor(currentDay, team);
+  const currentDayTotal = (team) => calculatedDayTotal(currentDay, team);
+  const cumulativeTotal = (team) => previousTotal(team) + currentDayTotal(team);
+
+  const ranked = teams.slice().sort((a,b) => cumulativeTotal(b) - cumulativeTotal(a) || String(a.name).localeCompare(String(b.name)));
   const top = ranked[0];
-
-  const latestTeamSetScores = (teamId) => {
-    const matches = (data.matches || [])
-      .filter((m) => {
-        if (String(m.date || "") !== currentDay) return false;
-        if (ageFilter === "kids" && !matchIsKidsMixed(data, m)) return false;
-        if (ageFilter === "adult" && matchIsKidsMixed(data, m)) return false;
-        const r = matchResult(m);
-        return r.complete && String(m.status || "final") === "final" && (String(resolveMatchTeamId(data, m, "a")) === String(teamId) || String(resolveMatchTeamId(data, m, "b")) === String(teamId));
-      })
-      .slice()
-      .sort((a,b) => String(b.completedAt || b.id || "").localeCompare(String(a.completedAt || a.id || "")));
-    const m = matches[0];
-    if (!m) return <span className="muted">—</span>;
-    const side = String(resolveMatchTeamId(data, m, "a")) === String(teamId) ? "a" : "b";
-    return (
-      <div className="set-score-list" title="Latest completed Day 2 match set scores">
-        {(m.sets || []).map((set, idx) => {
-          if (!setDoneForMatch(m, idx)) return null;
-          const a = Number(set.a || 0), b = Number(set.b || 0);
-          const mine = side === "a" ? a : b;
-          const opp = side === "a" ? b : a;
-          const won = mine > opp;
-          return <span className={`set-score-pill ${won ? "won" : "lost"}`} key={idx}>{mine}–{opp}</span>;
-        })}
-      </div>
-    );
-  };
 
   const setBonus = (teamId, value) => {
     const v = value.trim();
@@ -5989,44 +6016,29 @@ function StandingsTab({ data, update, notify }) {
   };
 
   const columns = [
-    "Rank","Team","Day 1 Total","Day 2 Matches","Day 2 Sets W-L","Day 2 Set Points",
-    "Day 2 Match Wins","Day 2 Match Losses","Day 2 Match Points","Day 2 WC Bonus",
-    "Day 2 Total","Cumulative Total"
+    "Rank","Team",
+    ...pastDates.map(d => `${prettyDay(d)} Total`),
+    `${prettyDay(currentDay)} Sets Won`, `${prettyDay(currentDay)} Sets Lost`,
+    `${prettyDay(currentDay)} Matches Won`, `${prettyDay(currentDay)} Matches Lost`,
+    `${prettyDay(currentDay)} Set Points`, `${prettyDay(currentDay)} Match Points`,
+    `${prettyDay(currentDay)} WC Bonus`, `${prettyDay(currentDay)} Total`, "Cumulative Total"
   ];
-  const rows = ranked.map((t,i) => [
-    i+1, t.name, day1Carry(t), t.played, `${t.setsWon}-${t.setsLost}`, t.setPoints,
-    t.matchWins, t.matchLosses, t.matchPoints, day2Bonus(t) || "", day2Total(t), cumulativeTotal(t)
-  ]);
-
-  const onImport = (objs) => {
-    let n = 0;
-    update((d) => {
-      const dailyBonuses = { ...(d.dailyBonuses || {}) };
-      const bonuses = { ...(dailyBonuses[currentDay] || {}) };
-      objs.forEach((o) => {
-        const name = pick(o, ["team", "team name"]);
-        const b = pick(o, ["bonus", "bonus points", "extra"]);
-        const pool = (d.teams || []).filter(t => ageFilter === "kids" ? (String(t.ageGroup||"").toLowerCase()==="kids" || String(t.id||"").startsWith("kids-")) : !(String(t.ageGroup||"").toLowerCase()==="kids" || String(t.id||"").startsWith("kids-")));
-        const t = pool.find((x) => String(x.name||"").toLowerCase() === String(name||"").toLowerCase());
-        if (!t || b === "") return;
-        bonuses[t.id] = Number(b) || 0;
-        n++;
-      });
-      dailyBonuses[currentDay] = bonuses;
-      return { ...d, dailyBonuses };
-    });
-    notify(`${n} Day 2 bonus values applied.`);
-  };
+  const rows = ranked.map((t,i) => {
+    const r = currentRow(t);
+    return [i+1, t.name, ...pastDates.map(d => historicalDayTotal(d,t)),
+      r.setsWon, r.setsLost, r.matchWins, r.matchLosses, r.setPoints, r.matchPoints,
+      bonusFor(currentDay,t) || "", currentDayTotal(t), cumulativeTotal(t)];
+  });
 
   return (
     <div className="stack">
       <section className="card">
         <header className="card-head">
           <div>
-            <span className="eyebrow">20 Sep · Day 2</span>
-            <h2>{ageFilter === "kids" ? "Kids Mixed — Day 2 Standings" : "Adults — Day 2 Standings"}</h2>
+            <span className="eyebrow">{prettyDay(currentDay)} · Current Day</span>
+            <h2>{ageFilter === "kids" ? "Kids Mixed — Daily + Cumulative Standings" : "Adults — Daily + Cumulative Standings"}</h2>
             <div className="standings-formula">
-              Day 1 is carried forward as one score. Every Day 2 scoring column is shown in full. Cumulative Total = Day 1 Total + Day 2 Total.
+              Past dates are locked as one daily score. Current Day Total = Set Points + Match Points + editable WC Bonus. Cumulative Total = Previous Daily Totals + Current Day Total.
             </div>
           </div>
           <select value={ageFilter} onChange={(e) => setAgeFilter(e.target.value)}>
@@ -6036,11 +6048,11 @@ function StandingsTab({ data, update, notify }) {
         </header>
       </section>
 
-      <DataBar name="standings" columns={columns} rows={rows} onImport={onImport}
-        note="Day 1 is one carry-forward column. Day 2 shows full scoring. Wild Card Used/9 is removed; only the manual Day 2 WC Bonus is shown." notify={notify} />
+      <DataBar name="dynamic-daily-standings" columns={columns} rows={rows}
+        note="Past days are shown as one final daily total. Only the current date shows the full scoring breakdown and editable WC bonus." notify={notify} />
 
       {ranked.length === 0 ? (
-        <Empty title="No teams to rank" body="Complete Day 2 matches to build today's standings." />
+        <Empty title="No teams to rank" body="Complete matches to build the standings." />
       ) : (
         <>
           {top ? (
@@ -6048,14 +6060,14 @@ function StandingsTab({ data, update, notify }) {
               <span className="databar-tag">Cumulative leader</span>
               <h2>{top.name}</h2>
               <div className="leader-num mono">{cumulativeTotal(top)}</div>
-              <span className="muted">Day 1 {day1Carry(top)} + Day 2 {day2Total(top)}</span>
+              <span className="muted">Previous {previousTotal(top)} + {prettyDay(currentDay)} {currentDayTotal(top)}</span>
             </section>
           ) : null}
 
           <section className="card">
             <header className="card-head">
-              <h2>{ageFilter === "kids" ? "Kids Mixed — Day 2 + Cumulative" : "Adults — Day 2 + Cumulative"}</h2>
-              <span className="muted">Day 2: 5 per set win · 25 per match win · WC Bonus manual</span>
+              <h2>{ageFilter === "kids" ? "Kids Mixed" : "Adults"} — Standings</h2>
+              <span className="muted">Current WC is editable · past-day totals stay fixed</span>
             </header>
             <div className="table-scroll">
               <table className="standings">
@@ -6063,42 +6075,43 @@ function StandingsTab({ data, update, notify }) {
                   <tr>
                     <th>#</th>
                     <th>Team</th>
-                    <th title="Final score carried forward from 19 Sep">Day 1<br/><span className="muted small">19 Sep</span></th>
-                    <th title="Day 2 matches played">M</th>
-                    <th title="Day 2 sets won–lost">Sets W–L</th>
-                    <th title="Latest completed Day 2 match set scores">Set Scores</th>
-                    <th title="Day 2: 5 points per set won">Set Pts</th>
-                    <th title="Day 2 matches won">Match W</th>
-                    <th title="Day 2 matches lost">Match L</th>
-                    <th title="Day 2: 25 points per match won">Match Pts</th>
-                    <th title="Manual Day 2 Wild Card bonus">WC Bonus</th>
-                    <th title="Day 2 Set Pts + Match Pts + WC Bonus">Day 2<br/>Total</th>
-                    <th title="Day 1 + Day 2">TOTAL</th>
+                    {pastDates.map(d => <th key={d} title={`Final score for ${prettyDay(d)}`}>{prettyDay(d)}<br/><span className="muted small">Total</span></th>)}
+                    <th title="Current-day sets won">Sets<br/>Won</th>
+                    <th title="Current-day sets lost">Sets<br/>Lost</th>
+                    <th title="Current-day matches won">Match<br/>Won</th>
+                    <th title="Current-day matches lost">Match<br/>Lost</th>
+                    <th title="5 points for each current-day set won">Set<br/>Pts</th>
+                    <th title="25 points for each current-day match won">Match<br/>Pts</th>
+                    <th title="Editable current-day Wild Card bonus">WC<br/>Bonus</th>
+                    <th title="Set Points + Match Points + WC Bonus">{prettyDay(currentDay)}<br/>Total</th>
+                    <th title="All previous daily totals + current-day total">Cumulative<br/>Total</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {ranked.map((t, i) => (
-                    <tr key={t.id} className={i === 0 ? "first" : ""}>
-                      <td className="mono rank">{i + 1}</td>
-                      <td className="strong">{t.name}</td>
-                      <td className="mono total">{day1Carry(t)}</td>
-                      <td className="mono">{t.played}</td>
-                      <td className="mono"><span className="set-record"><span>{t.setsWon}</span><span className="set-record-dash">–</span><span>{t.setsLost}</span></span></td>
-                      <td>{latestTeamSetScores(t.id)}</td>
-                      <td className="mono">{t.setPoints}</td>
-                      <td className="mono">{t.matchWins}</td>
-                      <td className="mono muted">{t.matchLosses}</td>
-                      <td className="mono">{t.matchPoints}</td>
-                      <td>
-                        <input className="mono bonus-input" inputMode="numeric"
-                          value={(((data.dailyBonuses || {})[currentDay]) || {})[t.id] == null ? "" : String((((data.dailyBonuses || {})[currentDay]) || {})[t.id])}
-                          onChange={(e) => setBonus(t.id, e.target.value)} placeholder="—"
-                          aria-label={"Day 2 Wild Card bonus points for " + t.name} />
-                      </td>
-                      <td className="mono total">{day2Total(t)}</td>
-                      <td className="mono total"><b>{cumulativeTotal(t)}</b></td>
-                    </tr>
-                  ))}
+                  {ranked.map((t, i) => {
+                    const r = currentRow(t);
+                    return (
+                      <tr key={t.id || t.name} className={i === 0 ? "first" : ""}>
+                        <td className="mono rank">{i + 1}</td>
+                        <td className="strong">{t.name}</td>
+                        {pastDates.map(d => <td key={d} className="mono total">{historicalDayTotal(d,t)}</td>)}
+                        <td className="mono">{r.setsWon}</td>
+                        <td className="mono muted">{r.setsLost}</td>
+                        <td className="mono">{r.matchWins}</td>
+                        <td className="mono muted">{r.matchLosses}</td>
+                        <td className="mono">{r.setPoints}</td>
+                        <td className="mono">{r.matchPoints}</td>
+                        <td>
+                          <input className="mono bonus-input" inputMode="numeric"
+                            value={(((data.dailyBonuses || {})[currentDay]) || {})[t.id] == null ? "" : String((((data.dailyBonuses || {})[currentDay]) || {})[t.id])}
+                            onChange={(e) => setBonus(t.id, e.target.value)} placeholder="—"
+                            aria-label={`${prettyDay(currentDay)} Wild Card bonus points for ${t.name}`} />
+                        </td>
+                        <td className="mono total">{currentDayTotal(t)}</td>
+                        <td className="mono total"><b>{cumulativeTotal(t)}</b></td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
