@@ -1,3 +1,5 @@
+<!-- 22 SEP 2026 FINAL LIVE-SCORE REPAIR: Team standings ignore individual/duplicate mirror records; referee-sheet correction applied; WC bonus remains editable; no hard-coded standings. -->
+<!-- 22 SEP 2026 TRUE DYNAMIC STANDINGS FIX: removed hard-coded 19-Sep ledger/canonical/locked totals; all days derive from saved final match scores; editable daily WC bonus remains separate. -->
 <!-- LIVE SCORE -> STANDINGS FIX 21 SEP 2026: Adult-only 19-Sep canonical guard; robust player/team colour attribution; fixtures and scores unchanged. -->
 <!-- DYNAMIC DAILY STANDINGS UPDATE 21 SEP 2026: past days collapse to one score; current date shows W/L, points, editable WC, day total and cumulative. -->
 <!-- STANDINGS RECONCILIATION 21 SEP 2026: Kids 19 Sep corrected from verified set-by-set scores; 20 Sep team attribution resolves through player membership; scores/fixtures untouched. -->
@@ -5731,7 +5733,7 @@ function computeStandings(data, day, group = "all") {
     return table.find(r => String(r.name || "").trim().toLowerCase() === c) ||
            table.find(r => String(r.name || "").toLowerCase().includes(c));
   };
-  const useAdult19SepLedger = group !== "kids" && (wholeRun || String(day) === "2026-09-19");
+  const useAdult19SepLedger = false; // 22 Sep fix: all standings derive from saved final matches
   if (useAdult19SepLedger) {
     adultLedger19Sep.forEach(x => {
       const A = adultColourRow(x[0]), B = adultColourRow(x[1]);
@@ -5750,6 +5752,9 @@ function computeStandings(data, day, group = "all") {
   }
 
   (data.matches || []).forEach((m) => {
+    // FINAL 22 SEP: individual/mirror records are player-history copies of official team matches.
+    // Never count them in colour-team standings or the same match can be counted twice.
+    if (m && m.individual === true) return;
     // Adult standings are locked to the verified 19 Sep referee ledger above.
     // Do not add any stored Adult/demo/import copies on top of that ledger; they can
     // otherwise make M / Sets W-L differ from the verified 12 matches per colour.
@@ -5839,7 +5844,7 @@ function computeStandings(data, day, group = "all") {
   // CRITICAL FIX 21 SEP 2026: apply the audited Adult 19-Sep canonical ledger
   // ONLY to Adult standings. Previously this block also matched Kids team names
   // (Red/Blue/Orange/Black) and could overwrite correctly calculated Kids totals.
-  if (String(day) === "2026-09-19" && group !== "kids") {
+  if (false && String(day) === "2026-09-19" && group !== "kids") {
     const canonicalAdult = {
       red:    { played:12, matchWins:9, matchLosses:3, setsWon:28, setsLost:8,  setPoints:140, matchPoints:225 },
       blue:   { played:12, matchWins:7, matchLosses:5, setsWon:20, setsLost:16, setPoints:100, matchPoints:175 },
@@ -5974,7 +5979,7 @@ function StandingsTab({ data, update, notify }) {
   const pastDates = tournamentDates.filter(d => d < currentDay);
 
   // 19 Sep was manually audited match-by-match and is preserved as the final historical day score.
-  const locked19Sep = ageFilter === "adult"
+  const locked19Sep_UNUSED = ageFilter === "adult"
     ? { red:395, blue:295, orange:250, black:100 }
     : { red:260, blue:200, orange:125, black:135 };
 
@@ -5998,13 +6003,7 @@ function StandingsTab({ data, update, notify }) {
     const r = rowFor(date, team);
     return Number(r.setPoints || 0) + Number(r.matchPoints || 0) + bonusFor(date, team);
   };
-  const historicalDayTotal = (date, team) => {
-    if (date === "2026-09-19") {
-      const key = String(team.name || "").trim().toLowerCase();
-      if (locked19Sep[key] != null) return locked19Sep[key];
-    }
-    return calculatedDayTotal(date, team);
-  };
+  const historicalDayTotal = (date, team) => calculatedDayTotal(date, team); // 22 Sep: never hard-code a past day
   const previousTotal = (team) => pastDates.reduce((sum, d) => sum + historicalDayTotal(d, team), 0);
   const currentRow = (team) => rowFor(currentDay, team);
   const currentDayTotal = (team) => calculatedDayTotal(currentDay, team);
