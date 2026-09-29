@@ -1,3 +1,4 @@
+<!-- 29 SEP 2026 INDIVIDUAL TOURNAMENT REPORT SAFE ADDITION: dynamic report from completed TT Pulse scores; tier-aware ranking with tier hidden; no team standings/totals; Excel + Print/PDF. -->
 <!-- 22 SEP 2026 FINAL LIVE-SCORE REPAIR: Team standings ignore individual/duplicate mirror records; referee-sheet correction applied; WC bonus remains editable; no hard-coded standings. -->
 <!-- 22 SEP 2026 TRUE DYNAMIC STANDINGS FIX: removed hard-coded 19-Sep ledger/canonical/locked totals; all days derive from saved final match scores; editable daily WC bonus remains separate. -->
 <!-- LIVE SCORE -> STANDINGS FIX 21 SEP 2026: Adult-only 19-Sep canonical guard; robust player/team colour attribution; fixtures and scores unchanged. -->
@@ -9366,781 +9367,140 @@ function DashboardTab({ data, role, notify, update, setTab }) {
    ============================================================ */
 
 function ReportTab({ data, tiers, notify, update, role }) {
-  const days = Array.from(new Set(data.matches.map((m) => m.date))).sort();
+  const days = Array.from(new Set((data.matches || []).map(m => m.date).filter(Boolean))).sort();
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [year, setYear] = useState("");
-  const [h2hPlayer, setH2hPlayer] = useState("");
   const [reportGroup, setReportGroup] = useState("all");
   const [resettingScores, setResettingScores] = useState(false);
+
   const resetScoringOnly = async () => {
     if (role !== "super") { notify("Only Super Admin can reset match scoring."); return; }
     if (resettingScores) return;
     if (!confirm("RESET MATCH RESULTS / LIVE SCORING?\n\nThis clears ALL old/test/live match results and scoring links.\n\nPlayers, availability, calibration, tiers, teams and ACCEPTED/OFFICIAL FIXTURES stay unchanged.")) return;
-
     setResettingScores(true);
     try {
-      const clean = {
-        ...data,
-        matches: [],
-        bonuses: {},
-        fixtures: (data.fixtures || []).map((f) => {
-          const n = { ...f };
-          delete n.matchId;
-          delete n.resultPending;
-          delete n.liveMatchId;
-          return n;
-        }),
-      };
+      const clean = { ...data, matches: [], bonuses: {}, fixtures: (data.fixtures || []).map(f => { const n={...f}; delete n.matchId; delete n.resultPending; delete n.liveMatchId; return n; }) };
       const json = JSON.stringify(clean);
-
-      // 1. Change the screen immediately.
-      setFrom(""); setTo(""); setH2hPlayer("");
-      update(() => clean);
-      try { localStorage.setItem(STORE_KEY, json); } catch (e) {}
-      try { localStorage.removeItem("tt_pulse_wc_integrated_test_v1"); } catch (e) {}
-
-      // 2. Force the exact clean document to Supabase (do not depend on the
-      // debounced autosave), using the same credentials as normal TT-Pulse saves.
+      setFrom(""); setTo(""); update(() => clean);
+      try { localStorage.setItem(STORE_KEY, json); localStorage.removeItem("tt_pulse_wc_integrated_test_v1"); } catch(e) {}
       const C = window.TT_CLOUD;
       if (C && C.url && C.anonKey) {
         const token = window.TT_AUTH_TOKEN || sessionStorage.getItem("tt_auth_token") || C.anonKey;
         const base = C.url.replace(/\/+$/, "") + "/rest/v1/" + C.table;
-        const response = await fetch(base + "?on_conflict=id", {
-          method: "POST",
-          headers: {
-            apikey: C.anonKey,
-            Authorization: "Bearer " + token,
-            "Content-Type": "application/json",
-            Prefer: "resolution=merge-duplicates,return=representation"
-          },
-          body: JSON.stringify([{ id: C.row, doc: clean, updated_at: new Date().toISOString() }])
-        });
-        const body = await response.text();
-        if (!response.ok) throw new Error("Cloud reset failed (" + response.status + "): " + body);
-
-        // 3. Read it back. Do not claim success unless the database itself says 0 matches.
-        const verify = await fetch(base + "?id=eq." + encodeURIComponent(C.row) + "&select=doc,updated_at", {
-          headers: { apikey: C.anonKey, Authorization: "Bearer " + token }
-        });
-        const rows = verify.ok ? await verify.json() : [];
-        const saved = rows && rows[0] && rows[0].doc;
-        if (!saved || !Array.isArray(saved.matches) || saved.matches.length !== 0) {
-          throw new Error("Reset could not be verified in the database.");
-        }
-        const verifiedJson = JSON.stringify(saved);
-        try { localStorage.setItem(STORE_KEY, verifiedJson); } catch (e) {}
+        const response = await fetch(base + "?on_conflict=id", { method:"POST", headers:{apikey:C.anonKey,Authorization:"Bearer "+token,"Content-Type":"application/json",Prefer:"resolution=merge-duplicates,return=representation"}, body:JSON.stringify([{id:C.row,doc:clean,updated_at:new Date().toISOString()}]) });
+        const body = await response.text(); if (!response.ok) throw new Error("Cloud reset failed ("+response.status+"): "+body);
+        const verify = await fetch(base + "?id=eq."+encodeURIComponent(C.row)+"&select=doc,updated_at", {headers:{apikey:C.anonKey,Authorization:"Bearer "+token}});
+        const rr = verify.ok ? await verify.json() : []; const saved=rr&&rr[0]&&rr[0].doc;
+        if (!saved || !Array.isArray(saved.matches) || saved.matches.length!==0) throw new Error("Reset could not be verified in the database.");
+        try { localStorage.setItem(STORE_KEY, JSON.stringify(saved)); } catch(e) {}
       }
-
       notify("RESET VERIFIED — 0 matches. Official fixtures are preserved for fresh scoring.");
-    } catch (err) {
-      console.error(err);
-      notify("RESET FAILED — " + (err?.message || err));
-    } finally {
-      setResettingScores(false);
-    }
+    } catch(err) { console.error(err); notify("RESET FAILED — "+(err?.message||err)); }
+    finally { setResettingScores(false); }
   };
 
-  /* A season is a year. The report opens on the most recent one, which is
-     what the awards night wants, and the dates below still override it. */
-  const years = Array.from(new Set(days.map((d) => d.slice(0, 4)))).sort();
-  const season = year || years[years.length - 1] || "";
-  const seasonDays = season ? days.filter((d) => d.slice(0, 4) === season) : days;
-
+  const years = Array.from(new Set(days.map(d => d.slice(0,4)))).sort();
+  const season = year || years[years.length-1] || "";
+  const seasonDays = season ? days.filter(d => d.slice(0,4)===season) : days;
   const start = from || seasonDays[0] || "";
-  const end = to || seasonDays[seasonDays.length - 1] || "";
+  const end = to || seasonDays[seasonDays.length-1] || "";
+  const inRange = d => (!start || d>=start) && (!end || d<=end);
+  const isKidsMatch = m => (m.fixtureGroup === "kids") || isKid(m.category);
+  const selectedMatches = (data.matches || []).filter(m => inRange(m.date) && (reportGroup==="all" || (reportGroup==="kids" ? isKidsMatch(m) : !isKidsMatch(m))));
+  const matches = selectedMatches.filter(m => matchResult(m).complete);
 
-  const inRange = (d) => (!start || d >= start) && (!end || d <= end);
-  const matches = data.matches.filter((m) => inRange(m.date) && (reportGroup === "all" || (reportGroup === "kids" ? ((m.fixtureGroup === "kids") || isKid(m.category)) : !((m.fixtureGroup === "kids") || isKid(m.category)))));
-  const decided = matches.filter((m) => matchResult(m).complete);
+  const rally = matches.reduce((sum,m)=>sum+(m.sets||[]).slice(0,3).reduce((s,x)=>s+num(x.a)+num(x.b),0),0);
+  const setsPlayed = matches.reduce((sum,m)=>sum+(m.sets||[]).slice(0,3).filter((s,i)=>setWinnerForMatch(m,i)).length,0);
+  const threeZero = matches.filter(m=>{const r=matchResult(m); return r.aSets===3 || r.bSets===3;}).length;
+  const twoOne = matches.length-threeZero;
+  const comebacks = matches.filter(m=>{const first=setWinnerForMatch(m,0); const r=matchResult(m); return first && r.winner && first!==r.winner;}).length;
+  let closeSets=0,deuceSets=0,highestSet=0,totalMargin=0;
+  matches.forEach(m=>(m.sets||[]).slice(0,3).forEach((s,i)=>{ if(!setWinnerForMatch(m,i))return; const a=num(s.a),b=num(s.b),margin=Math.abs(a-b); totalMargin+=margin; if(margin<=2)closeSets++; if(Math.max(a,b)>11)deuceSets++; highestSet=Math.max(highestSet,a+b); }));
+  const avgSetPoints = setsPlayed ? rally/setsPlayed : 0;
+  const avgMargin = setsPlayed ? totalMargin/setsPlayed : 0;
 
-  const rally = matches.reduce(
-    (sum, m) => sum + (m.sets || []).reduce((s, x) => s + num(x.a) + num(x.b), 0),
-    0
-  );
-  const setsPlayed = matches.reduce((sum, m) => sum + (m.sets || []).filter(setDone).length, 0);
-  const straight = decided.filter((m) => {
-    const r = matchResult(m);
-    return r.aSets + r.bSets === 2;
-  }).length;
+  const playerRows = (data.players || []).map(p=>{
+    let played=0,won=0,rallyFor=0,rallyAgainst=0,contribution=0;
+    matches.forEach(m=>{
+      const isA=m.playerA===p.id,isB=m.playerB===p.id; if(!isA&&!isB)return;
+      const r=matchResult(m); played++; if((isA&&r.winner==="a")||(isB&&r.winner==="b"))won++;
+      contribution += isA ? r.aPts : r.bPts;
+      (m.sets||[]).slice(0,3).forEach(s=>{rallyFor+=isA?num(s.a):num(s.b); rallyAgainst+=isA?num(s.b):num(s.a);});
+    });
+    return {player:p,played,won,lost:played-won,rallyFor,rallyAgainst,diff:rallyFor-rallyAgainst,ratio:rallyAgainst?rallyFor/rallyAgainst:0,contribution,tier:tiers[p.id]?tiers[p.id].tier:null};
+  }).filter(r=>r.played>0);
 
-  /* Teams over the range. */
-  const teamRows = data.teams
-    .map((t) => {
-      let played = 0,
-        wins = 0,
-        setsWon = 0,
-        setsLost = 0,
-        points = 0,
-        rallyFor = 0,
-        rallyAgainst = 0;
-      matches.forEach((m) => {
-        const isA = m.teamA === t.id;
-        const isB = m.teamB === t.id;
-        if (!isA && !isB) return;
-        const r = matchResult(m);
-        played++;
-        if ((isA && r.winner === "a") || (isB && r.winner === "b")) wins++;
-        setsWon += isA ? r.aSets : r.bSets;
-        setsLost += isA ? r.bSets : r.aSets;
-        points += isA ? r.aPts : r.bPts;
-        (m.sets || []).forEach((s) => {
-          rallyFor += isA ? num(s.a) : num(s.b);
-          rallyAgainst += isA ? num(s.b) : num(s.a);
-        });
-      });
-      return {
-        team: t,
-        played,
-        wins,
-        setsWon,
-        setsLost,
-        points,
-        rallyFor,
-        rallyAgainst,
-        winPct: played ? Math.round((wins / played) * 100) : 0,
-      };
-    })
-    .filter((r) => r.played > 0)
-    .sort((a, b) => b.points - a.points || b.wins - a.wins || b.setsWon - a.setsWon);
-
-  /* Individuals over the range. */
-  const playerRows = data.players
-    .map((p) => {
-      let played = 0,
-        won = 0,
-        setsWon = 0,
-        setsLost = 0,
-        rallyFor = 0,
-        rallyAgainst = 0,
-        points = 0;
-      matches.forEach((m) => {
-        const isA = m.playerA === p.id;
-        const isB = m.playerB === p.id;
-        if (!isA && !isB) return;
-        const r = matchResult(m);
-        played++;
-        if ((isA && r.winner === "a") || (isB && r.winner === "b")) won++;
-        setsWon += isA ? r.aSets : r.bSets;
-        setsLost += isA ? r.bSets : r.aSets;
-        points += isA ? r.aPts : r.bPts;
-        (m.sets || []).forEach((s) => {
-          rallyFor += isA ? num(s.a) : num(s.b);
-          rallyAgainst += isA ? num(s.b) : num(s.a);
-        });
-      });
-      const team = data.teams.find((t) => t.playerIds.includes(p.id));
-      return {
-        player: p,
-        team,
-        played,
-        won,
-        lost: played - won,
-        setsWon,
-        setsLost,
-        rallyFor,
-        rallyAgainst,
-        points,
-        winPct: played ? Math.round((won / played) * 100) : 0,
-        diff: rallyFor - rallyAgainst,
-      };
-    })
-    .filter((r) => r.played > 0)
-    .sort((a, b) => b.points - a.points || b.won - a.won || b.diff - a.diff);
-
-  /* Who met whom, and who came off better. */
-  const h2h = {};
-  matches.forEach((mt) => {
-    if (!mt.playerA || !mt.playerB) return;
-    const r = matchResult(mt);
-    const add = (me, opp, won) => {
-      const row = (h2h[me] = h2h[me] || {});
-      const cell = (row[opp] = row[opp] || { played: 0, won: 0 });
-      cell.played++;
-      if (won) cell.won++;
-    };
-    add(mt.playerA, mt.playerB, r.winner === "a");
-    add(mt.playerB, mt.playerA, r.winner === "b");
-  });
-
-  const tierOf = (pid) => (tiers[pid] ? tiers[pid].tier : null);
-  const teamNameOf = (pid) => {
-    const t = data.teams.find((x) => x.playerIds.includes(pid));
-    return t ? t.name : "";
+  const adultRows=playerRows.filter(r=>!isKid(r.player.gender));
+  const kidsRows=playerRows.filter(r=>isKid(r.player.gender));
+  const rankWithinHiddenGroup = rows => {
+    const groups={}; rows.forEach(r=>{const k=(r.player.gender||"")+"|"+(r.tier||"NA"); (groups[k]=groups[k]||[]).push(r);});
+    Object.values(groups).forEach(g=>g.sort((a,b)=>b.contribution-a.contribution||b.won-a.won||b.diff-a.diff||b.ratio-a.ratio||fullName(a.player).localeCompare(fullName(b.player))).forEach((r,i)=>r.hiddenRank=i+1));
+    return rows.slice().sort((a,b)=>(a.hiddenRank||99)-(b.hiddenRank||99)||b.contribution-a.contribution||b.diff-a.diff||fullName(a.player).localeCompare(fullName(b.player)));
   };
-  const playerById = (pid) => data.players.find((x) => x.id === pid);
+  const rankedAdults=rankWithinHiddenGroup(adultRows), rankedKids=rankWithinHiddenGroup(kidsRows);
+  const contributionRows=playerRows.slice().sort((a,b)=>b.contribution-a.contribution||b.won-a.won||b.diff-a.diff);
+  const maxContribution=Math.max(1,...contributionRows.map(r=>r.contribution));
 
-  /* The ladder inside each tier of each category — the line the awards
-     night actually reads out. */
-  const tierGroups = [];
-  CATEGORIES.forEach((c) => {
-    const inCat = playerRows.filter((r) => r.player.gender === c.key);
-    const nums = Array.from(new Set(inCat.map((r) => tierOf(r.player.id)).filter(Boolean))).sort(
-      (a, b) => a - b
-    );
-    nums.forEach((t) => {
-      const list = inCat
-        .filter((r) => tierOf(r.player.id) === t)
-        .sort((a, b) => b.points - a.points || b.won - a.won || b.diff - a.diff);
-      if (list.length) tierGroups.push({ category: c.key, tier: t, list });
-    });
-  });
+  const daily = Array.from(new Set(matches.map(m=>m.date))).sort().map(date=>({date,count:matches.filter(m=>m.date===date).length}));
+  const maxDaily=Math.max(1,...daily.map(x=>x.count));
+  const rankCounts=[1,2,3,4].map(rank=>({rank,adult:rankedAdults.filter(r=>r.hiddenRank===rank).length,kids:rankedKids.filter(r=>r.hiddenRank===rank).length}));
 
-  const tierColumns = ["Category", "Tier", "Rank", "Player", "Team", "Played", "Won", "Lost", "Win %", "Points"];
-  const tierExport = [];
-  tierGroups.forEach((g) =>
-    g.list.forEach((r, i) =>
-      tierExport.push([
-        catLabel(g.category),
-        "T" + g.tier,
-        i + 1,
-        fullName(r.player),
-        r.team ? r.team.name : "",
-        r.played,
-        r.won,
-        r.lost,
-        r.winPct + "%",
-        r.points,
-      ])
-    )
+  const statRows=[
+    ["Completed matches",matches.length],["Sets played",setsPlayed],["Total rally points",rally],["Players who played",playerRows.length],
+    ["Average rally points per set",avgSetPoints.toFixed(1)],["Average winning margin per set",avgMargin.toFixed(1)],["Matches won 3–0",threeZero],["Matches won 2–1",twoOne],
+    ["Comebacks after losing Set 1",comebacks],["Close sets (margin ≤2)",closeSets],["Deuce sets (winner >11)",deuceSets],["Highest-scoring set",highestSet]
+  ];
+  const playerCols=["Rank","Player","Played","Won","Lost","Points For","Points Against","Point Difference","Point Ratio","Contribution to Team"];
+  const exportRows = rows => rows.map(r=>[r.hiddenRank,fullName(r.player),r.played,r.won,r.lost,r.rallyFor,r.rallyAgainst,r.diff,Number(r.ratio.toFixed(2)),r.contribution]);
+
+  const downloadExcelReport=()=>{
+    if(!window.XLSX){notify("Excel library is not available.");return;}
+    const wb=window.XLSX.utils.book_new();
+    const summary=[["TT Pulse — Individual Tournament Report"],["From",start],["To",end],["Group",reportGroup==="all"?"All":reportGroup==="adult"?"Adults Mixed":"Kids Mixed"],[],["Metric","Value"],...statRows,[],["Note","Rank is calculated within the player's actual tier/category group; tier is deliberately not displayed."],["Note","No team standings or team total points are included."]];
+    window.XLSX.utils.book_append_sheet(wb,window.XLSX.utils.aoa_to_sheet(summary),"Tournament Overview");
+    window.XLSX.utils.book_append_sheet(wb,window.XLSX.utils.aoa_to_sheet([playerCols,...exportRows(rankedAdults)]),"Adults Mixed Ranking");
+    window.XLSX.utils.book_append_sheet(wb,window.XLSX.utils.aoa_to_sheet([playerCols,...exportRows(rankedKids)]),"Kids Mixed Ranking");
+    window.XLSX.utils.book_append_sheet(wb,window.XLSX.utils.aoa_to_sheet([["Category","Player","Played","Won","Point Difference","Contribution Points"],...contributionRows.map(r=>[isKid(r.player.gender)?"Kids Mixed":"Adults Mixed",fullName(r.player),r.played,r.won,r.diff,r.contribution])]),"Individual Contribution");
+    window.XLSX.utils.book_append_sheet(wb,window.XLSX.utils.aoa_to_sheet([["Date","Completed Matches"],...daily.map(x=>[x.date,x.count])]),"Daily Statistics");
+    window.XLSX.writeFile(wb,"TT-Pulse-Individual-Report-"+(start||"all")+"-to-"+(end||"all")+".xlsx");
+    notify("Individual tournament report downloaded.");
+  };
+
+  const RankingTable=({rows,title})=>(
+    <section className="card">
+      <header className="card-head"><div><span className="eyebrow">Roll of honour</span><h2>{title}</h2></div><span className="muted">Tier-wise ranking · tier hidden</span></header>
+      <div className="table-scroll"><table className="standings"><thead><tr>{playerCols.map(c=><th key={c}>{c}</th>)}</tr></thead><tbody>
+        {rows.map(r=><tr key={r.player.id} className={r.hiddenRank===1?"first":""}><td className="mono rank">{r.hiddenRank}</td><td className="strong">{fullName(r.player)}</td><td className="mono">{r.played}</td><td className="mono">{r.won}</td><td className="mono">{r.lost}</td><td className="mono">{r.rallyFor}</td><td className="mono">{r.rallyAgainst}</td><td className={"mono "+(r.diff>0?"good-text":"")}>{r.diff>0?"+":""}{r.diff}</td><td className="mono">{r.ratio.toFixed(2)}</td><td className="mono total">{r.contribution}</td></tr>)}
+      </tbody></table></div>
+    </section>
   );
 
-  const h2hColumns = [
-    "Player",
-    "Category",
-    "Tier",
-    "Team",
-    "Opponent",
-    "Opponent tier",
-    "Opponent team",
-    "Played",
-    "Won",
-    "Lost",
-  ];
-  const h2hExport = [];
-  playerRows.forEach((r) => {
-    const opps = h2h[r.player.id] || {};
-    Object.keys(opps).forEach((oid) => {
-      const o = playerById(oid);
-      if (!o) return;
-      h2hExport.push([
-        fullName(r.player),
-        catLabel(r.player.gender),
-        tierOf(r.player.id) ? "T" + tierOf(r.player.id) : "",
-        r.team ? r.team.name : "",
-        fullName(o),
-        tierOf(oid) ? "T" + tierOf(oid) : "",
-        teamNameOf(oid),
-        opps[oid].played,
-        opps[oid].won,
-        opps[oid].played - opps[oid].won,
-      ]);
-    });
-  });
+  return <div className="stack">
+    {role==="super"?<section className="card" style={{border:"2px solid #f59e0b"}}><header className="card-head"><div><h2>Fresh Tournament Scoring</h2><p className="muted" style={{margin:"4px 0 0"}}>Clear test/live scores before the real matches. Official fixtures stay exactly as accepted.</p></div><button type="button" className="btn danger" onClick={resetScoringOnly} disabled={resettingScores}>{resettingScores?"Resetting…":"Reset Match Results / Live Scoring"}</button></header><p className="muted" style={{margin:0}}>Keeps: Players · Availability · Calibration · Tiers · Teams · Official Fixtures. Clears: Match scores · pending/live matches · Wild Card results · manual team bonus points.</p></section>:null}
 
-  const h2hSubject = h2hPlayer || (playerRows[0] ? playerRows[0].player.id : "");
-  const h2hRows = Object.entries(h2h[h2hSubject] || {})
-    .map(([oid, v]) => ({ opp: playerById(oid), ...v }))
-    .filter((x) => x.opp)
-    .sort((a, b) => b.played - a.played || b.won - a.won);
+    <section className="card"><header className="card-head"><div><span className="eyebrow">Individual performance report</span><h2>Tournament Report {season}</h2></div><div className="head-tools">
+      <label className="range"><span>View</span><select value={reportGroup} onChange={e=>setReportGroup(e.target.value)}><option value="all">All</option><option value="adult">Adults Mixed</option><option value="kids">Kids Mixed</option></select></label>
+      {years.length>1?<label className="range"><span>Season</span><select value={season} onChange={e=>{setYear(e.target.value);setFrom("");setTo("");}}>{years.map(y=><option key={y} value={y}>{y}</option>)}</select></label>:null}
+      <label className="range"><span>From</span><input type="date" value={start} onChange={e=>setFrom(e.target.value)}/></label><label className="range"><span>To</span><input type="date" value={end} onChange={e=>setTo(e.target.value)}/></label>
+      <button className="btn btn-ghost" onClick={()=>window.print()}>Print / PDF</button><button className="btn btn-ghost" onClick={downloadExcelReport}>Download Excel</button>
+    </div></header>
+    <p className="muted plan-note">{start&&end?`This report covers ${prettyDate(start)} to ${prettyDate(end)}. `:""}Rank is calculated within each player's actual competition tier/category, but the tier itself is not displayed. No team standings or team totals appear here.</p>
+    {matches.length===0?<Empty title="No completed matches in this range" body="Finish a match, or widen the dates above."/>:<div className="stat-grid">
+      <div className="stat accent"><span>{matches.length}</span><em>Completed matches</em></div><div className="stat"><span>{setsPlayed}</span><em>Sets played</em></div><div className="stat"><span>{rally}</span><em>Rally points</em></div><div className="stat"><span>{playerRows.length}</span><em>Players</em></div><div className="stat"><span>{threeZero}</span><em>3–0 results</em></div><div className="stat"><span>{twoOne}</span><em>2–1 results</em></div>
+    </div>}</section>
 
-  const mostPlayed = playerRows.slice().sort((a, b) => b.played - a.played)[0];
-  const bestDiff = playerRows.slice().sort((a, b) => b.diff - a.diff)[0];
+    {matches.length?<section className="card"><header className="card-head"><h2>Detailed Tournament Statistics</h2><span className="muted">minute tournament information</span></header><div className="table-scroll"><table className="standings"><tbody>{statRows.map(([k,v])=><tr key={k}><td className="strong">{k}</td><td className="mono total">{v}</td></tr>)}</tbody></table></div></section>:null}
 
-  const mvp = playerRows[0];
-  const bestPct = playerRows
-    .filter((r) => r.played >= 3)
-    .slice()
-    .sort((a, b) => b.winPct - a.winPct || b.played - a.played)[0];
+    {daily.length?<section className="card"><header className="card-head"><h2>Matches by Day</h2><span className="muted">completed matches only</span></header><div style={{display:"grid",gap:10}}>{daily.map(x=><div key={x.date} style={{display:"grid",gridTemplateColumns:"110px 1fr 45px",gap:10,alignItems:"center"}}><span className="mono">{prettyDate(x.date)}</span><div style={{height:18,borderRadius:9,background:"rgba(148,163,184,.18)",overflow:"hidden"}}><div style={{height:"100%",width:((x.count/maxDaily)*100)+"%",background:"linear-gradient(90deg,#38bdf8,#22c55e)",borderRadius:9}}/></div><b className="mono">{x.count}</b></div>)}</div></section>:null}
 
-  const columns = [
-    "Player",
-    "Team",
-    "Category",
-    "Tier",
-    "Played",
-    "Won",
-    "Lost",
-    "Win %",
-    "Sets Won",
-    "Sets Lost",
-    "Rally Points For",
-    "Rally Points Against",
-    "Point Difference",
-    "Points Contributed",
-  ];
-  const rows = playerRows.map((r) => [
-    fullName(r.player),
-    r.team ? r.team.name : "",
-    catLabel(r.player.gender),
-    tiers[r.player.id] ? tiers[r.player.id].tier : "",
-    r.played,
-    r.won,
-    r.lost,
-    r.winPct + "%",
-    r.setsWon,
-    r.setsLost,
-    r.rallyFor,
-    r.rallyAgainst,
-    r.diff,
-    r.points,
-  ]);
+    {(reportGroup==="all"||reportGroup==="adult")&&rankedAdults.length?<RankingTable rows={rankedAdults} title="Adults Mixed Ranking"/>:null}
+    {(reportGroup==="all"||reportGroup==="kids")&&rankedKids.length?<RankingTable rows={rankedKids} title="Kids Mixed Ranking"/>:null}
 
-  const teamColumns = [
-    "Team",
-    "Played",
-    "Won",
-    "Win %",
-    "Sets Won",
-    "Sets Lost",
-    "Rally Points For",
-    "Rally Points Against",
-    "Points",
-  ];
-  const teamExport = teamRows.map((r) => [
-    r.team.name,
-    r.played,
-    r.wins,
-    r.winPct + "%",
-    r.setsWon,
-    r.setsLost,
-    r.rallyFor,
-    r.rallyAgainst,
-    r.points,
-  ]);
- const downloadExcelReport = () => {
-  if (!window.XLSX) {
-    notify("Excel library is not available.");
-    return;
-  }
+    {contributionRows.length?<section className="card"><header className="card-head"><div><span className="eyebrow">Player contribution</span><h2>Individual Contribution to Team</h2></div><span className="muted">team totals are not shown</span></header><div style={{display:"grid",gap:9}}>{contributionRows.slice(0,30).map((r,i)=><div key={r.player.id} style={{display:"grid",gridTemplateColumns:"34px minmax(150px,260px) 1fr 55px",gap:10,alignItems:"center"}}><span className="mono">{i+1}</span><span className="strong">{fullName(r.player)}</span><div style={{height:16,borderRadius:8,background:"rgba(148,163,184,.18)",overflow:"hidden"}}><div style={{height:"100%",width:((r.contribution/maxContribution)*100)+"%",background:"linear-gradient(90deg,#a78bfa,#38bdf8)",borderRadius:8}}/></div><b className="mono">{r.contribution}</b></div>)}</div></section>:null}
 
-  const wb = window.XLSX.utils.book_new();
-
-  // Summary
-  const summary = [
-    ["TT Pulse Tournament Report"],
-    ["From", start],
-    ["To", end],
-    ["Matches", matches.length],
-    ["Sets Played", setsPlayed],
-    ["Rally Points", rally],
-    ["Players", playerRows.length],
-    [],
-    ["Generated", new Date().toLocaleString()],
-  ];
-
-  const wsSummary = window.XLSX.utils.aoa_to_sheet(summary);
-  window.XLSX.utils.book_append_sheet(wb, wsSummary, "Summary");
-
-  // Team standings
-  const wsTeams = window.XLSX.utils.aoa_to_sheet([
-    teamColumns,
-    ...teamExport,
-  ]);
-  window.XLSX.utils.book_append_sheet(wb, wsTeams, "Team Standings");
-
-  // Player performance
-  const wsPlayers = window.XLSX.utils.aoa_to_sheet([
-    columns,
-    ...rows,
-  ]);
-  window.XLSX.utils.book_append_sheet(wb, wsPlayers, "Player Performance");
-
-  const filename =
-    "TT-Pulse-Report-" +
-    (start || "all") +
-    "-to-" +
-    (end || "all") +
-    ".xlsx";
-
-  window.XLSX.writeFile(wb, filename);
-
-  notify("Excel report downloaded.");
-};
-  return (
-    <div className="stack">
-      {role === "super" ? (
-        <section className="card" style={{border:"2px solid #f59e0b"}}>
-          <header className="card-head">
-            <div>
-              <h2>Fresh Tournament Scoring</h2>
-              <p className="muted" style={{margin:"4px 0 0"}}>Clear test/live scores before the real matches. Official fixtures stay exactly as accepted.</p>
-            </div>
-            <button type="button" className="btn danger" onClick={resetScoringOnly} disabled={resettingScores}>{resettingScores ? "Resetting…" : "Reset Match Results / Live Scoring"}</button>
-          </header>
-          <p className="muted" style={{margin:0}}>Keeps: Players · Availability · Calibration · Tiers · Teams · Official Fixtures. Clears: Match scores · pending/live matches · Wild Card results · manual team bonus points.</p>
-        </section>
-      ) : null}
-      <section className="card">
-        <header className="card-head">
-          <h2>Tournament report{season ? " " + season : ""}</h2>
-          <div className="head-tools">
-            <label className="range"><span>Group</span><select value={reportGroup} onChange={(e)=>setReportGroup(e.target.value)}><option value="all">Combined</option><option value="adult">Adults</option><option value="kids">Kids Mixed</option></select></label>
-            {years.length > 1 ? (
-              <label className="range">
-                <span>Season</span>
-                <select
-                  value={season}
-                  onChange={(e) => {
-                    setYear(e.target.value);
-                    setFrom("");
-                    setTo("");
-                  }}
-                >
-                  {years.map((y) => (
-                    <option key={y} value={y}>
-                      {y}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-            <label className="range">
-              <span>From</span>
-              <input type="date" value={start} onChange={(e) => setFrom(e.target.value)} />
-            </label>
-            <label className="range">
-              <span>To</span>
-              <input type="date" value={end} onChange={(e) => setTo(e.target.value)} />
-            </label>
-            <button className="btn btn-ghost" onClick={() => window.print()}>
-              Print
-            </button>
-            <button className="btn btn-ghost" onClick={downloadExcelReport}>
-  Download Excel
-</button>
-          </div>
-        </header>
-
-        {matches.length === 0 ? (
-          <Empty title="No matches in this range" body="Play a match, or widen the dates above." />
-        ) : (
-          <>
-            <p className="muted plan-note">
-              {days.length ? `Day 1 was ${prettyDate(days[0])}. ` : ""}
-              This report covers {prettyDate(start)} to {prettyDate(end)}.
-            </p>
-            <div className="stat-grid">
-              <div className="stat accent">
-                <span>{matches.length}</span>
-                <em>Matches</em>
-              </div>
-              <div className="stat">
-                <span>{setsPlayed}</span>
-                <em>Sets</em>
-              </div>
-              <div className="stat">
-                <span>{rally}</span>
-                <em>Rally points</em>
-              </div>
-              <div className="stat">
-                <span>{playerRows.length}</span>
-                <em>Players out</em>
-              </div>
-              <div className="stat">
-                <span>{straight}</span>
-                <em>Straight-set wins</em>
-              </div>
-              <div className="stat">
-                <span>{decided.length ? Math.round((straight / decided.length) * 100) : 0}%</span>
-                <em>Decided in two</em>
-              </div>
-            </div>
-          </>
-        )}
-      </section>
-
-      {mvp ? (
-        <section className="card">
-          <header className="card-head">
-            <h2>Standouts</h2>
-          </header>
-          <div className="standouts">
-            <div className="standout">
-              <span className="eyebrow">Most points contributed</span>
-              <h3>{fullName(mvp.player)}</h3>
-              <p className="muted">
-                {mvp.points} points · {mvp.won} of {mvp.played} won ·{" "}
-                {mvp.team ? mvp.team.name : "no team"}
-              </p>
-            </div>
-            {bestPct ? (
-              <div className="standout">
-                <span className="eyebrow">Best win rate (3+ matches)</span>
-                <h3>{fullName(bestPct.player)}</h3>
-                <p className="muted">
-                  {bestPct.winPct}% · {bestPct.won} of {bestPct.played} ·{" "}
-                  {bestPct.team ? bestPct.team.name : "no team"}
-                </p>
-              </div>
-            ) : null}
-            {teamRows[0] ? (
-              <div className="standout">
-                <span className="eyebrow">Leading team</span>
-                <h3>{teamRows[0].team.name}</h3>
-                <p className="muted">
-                  {teamRows[0].points} points · {teamRows[0].wins} of {teamRows[0].played} won
-                </p>
-              </div>
-            ) : null}
-            {mostPlayed ? (
-              <div className="standout">
-                <span className="eyebrow">Most matches played</span>
-                <h3>{fullName(mostPlayed.player)}</h3>
-                <p className="muted">
-                  {mostPlayed.played} matches · {mostPlayed.won} won
-                </p>
-              </div>
-            ) : null}
-            {bestDiff ? (
-              <div className="standout">
-                <span className="eyebrow">Best point difference</span>
-                <h3>{fullName(bestDiff.player)}</h3>
-                <p className="muted">
-                  {bestDiff.diff > 0 ? "+" : ""}
-                  {bestDiff.diff} across {bestDiff.played} matches
-                </p>
-              </div>
-            ) : null}
-          </div>
-        </section>
-      ) : null}
-
-      {tierGroups.length ? (
-        <section className="card">
-          <header className="card-head">
-            <h2>Roll of honour {season}</h2>
-            <span className="muted">one champion per tier</span>
-          </header>
-          <div className="honour">
-            {tierGroups.map((g) => {
-              const w = g.list[0];
-              return (
-                <div className="honour-row" key={g.category + g.tier}>
-                  <span className={"chip tier-" + Math.min(g.tier, 5)}>
-                    T{g.tier}
-                    <em>{catLabel(g.category)}</em>
-                  </span>
-                  <span className="honour-name">
-                    <b>{fullName(w.player)}</b>
-                    <i>{w.team ? w.team.name : "no team"}</i>
-                  </span>
-                  <span className="mono muted">
-                    {w.won}/{w.played} won · {w.points} pts
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-      ) : null}
-
-      {teamRows.length ? (
-        <section className="card">
-          <header className="card-head">
-            <h2>Team performance</h2>
-          </header>
-          <DataBar name="report-teams" columns={teamColumns} rows={teamExport} notify={notify} />
-          <div className="table-scroll">
-            <table className="standings">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Team</th>
-                  <th>P</th>
-                  <th>W</th>
-                  <th>Win %</th>
-                  <th>Sets W–L</th>
-                  <th>Rally F–A</th>
-                  <th>Points</th>
-                </tr>
-              </thead>
-              <tbody>
-                {teamRows.map((r, i) => (
-                  <tr key={r.team.id} className={i === 0 ? "first" : ""}>
-                    <td className="mono rank">{i + 1}</td>
-                    <td className="strong">{r.team.name}</td>
-                    <td className="mono">{r.played}</td>
-                    <td className="mono">{r.wins}</td>
-                    <td className="mono">{r.winPct}%</td>
-                    <td className="mono">
-                      {r.setsWon}–{r.setsLost}
-                    </td>
-                    <td className="mono">
-                      {r.rallyFor}–{r.rallyAgainst}
-                    </td>
-                    <td className="mono total">{r.points}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      ) : null}
-
-      {playerRows.length ? (
-        <section className="card">
-          <header className="card-head">
-            <h2>Individual performance</h2>
-            <span className="muted">{playerRows.length} players</span>
-          </header>
-          <DataBar name="report-players" columns={columns} rows={rows} notify={notify} />
-          <div className="table-scroll">
-            <table className="standings">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Player</th>
-                  <th>Team</th>
-                  <th>Tier</th>
-                  <th>P</th>
-                  <th>W–L</th>
-                  <th>Win %</th>
-                  <th>Sets W–L</th>
-                  <th>Diff</th>
-                  <th>Points</th>
-                </tr>
-              </thead>
-              <tbody>
-                {playerRows.slice(0, 200).map((r, i) => (
-                  <tr key={r.player.id} className={i === 0 ? "first" : ""}>
-                    <td className="mono rank">{i + 1}</td>
-                    <td className="strong">{fullName(r.player)}</td>
-                    <td>{r.team ? r.team.name : <span className="muted">—</span>}</td>
-                    <td>
-                      <TierChip tier={tiers[r.player.id] ? tiers[r.player.id].tier : null} />
-                    </td>
-                    <td className="mono">{r.played}</td>
-                    <td className="mono">
-                      {r.won}–{r.lost}
-                    </td>
-                    <td className="mono">{r.winPct}%</td>
-                    <td className="mono">
-                      {r.setsWon}–{r.setsLost}
-                    </td>
-                    <td className={"mono" + (r.diff > 0 ? " good-text" : "")}>
-                      {r.diff > 0 ? "+" : ""}
-                      {r.diff}
-                    </td>
-                    <td className="mono total">{r.points}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      ) : null}
-
-      {tierGroups.length ? (
-        <section className="card">
-          <header className="card-head">
-            <h2>Tier by tier</h2>
-            <span className="muted">{tierGroups.length} tiers played</span>
-          </header>
-          <DataBar name={"report-tiers-" + season} columns={tierColumns} rows={tierExport} notify={notify} />
-          {tierGroups.map((g) => (
-            <div className="tier-block" key={g.category + g.tier}>
-              <div className="tier-block-head">
-                <span className={"chip tier-" + Math.min(g.tier, 5)}>
-                  T{g.tier}
-                  <em>{catLabel(g.category)}</em>
-                </span>
-                <span className="muted">{g.list.length} players</span>
-              </div>
-              <div className="table-scroll">
-                <table className="standings">
-                  <thead>
-                    <tr>
-                      <th>#</th>
-                      <th>Player</th>
-                      <th>Team</th>
-                      <th>P</th>
-                      <th>W–L</th>
-                      <th>Win %</th>
-                      <th>Sets W–L</th>
-                      <th>Points</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {g.list.map((r, i) => (
-                      <tr key={r.player.id} className={i === 0 ? "first" : ""}>
-                        <td className="mono rank">{i + 1}</td>
-                        <td className="strong">{fullName(r.player)}</td>
-                        <td>{r.team ? r.team.name : <span className="muted">—</span>}</td>
-                        <td className="mono">{r.played}</td>
-                        <td className="mono">
-                          {r.won}–{r.lost}
-                        </td>
-                        <td className="mono">{r.winPct}%</td>
-                        <td className="mono">
-                          {r.setsWon}–{r.setsLost}
-                        </td>
-                        <td className="mono total">{r.points}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ))}
-        </section>
-      ) : null}
-
-      {h2hExport.length ? (
-        <section className="card">
-          <header className="card-head">
-            <h2>Played against, won against</h2>
-            <select
-              className="day-pick"
-              value={h2hSubject}
-              onChange={(e) => setH2hPlayer(e.target.value)}
-            >
-              {playerRows.map((r) => (
-                <option key={r.player.id} value={r.player.id}>
-                  {fullName(r.player)}
-                </option>
-              ))}
-            </select>
-          </header>
-          <DataBar
-            name={"report-head-to-head-" + season}
-            columns={h2hColumns}
-            rows={h2hExport}
-            note="Every meeting in the season, one row per opponent."
-            notify={notify}
-          />
-          <div className="table-scroll">
-            <table className="standings">
-              <thead>
-                <tr>
-                  <th>Opponent</th>
-                  <th>Tier</th>
-                  <th>Team</th>
-                  <th>Played</th>
-                  <th>Won</th>
-                  <th>Lost</th>
-                </tr>
-              </thead>
-              <tbody>
-                {h2hRows.map((x) => (
-                  <tr key={x.opp.id}>
-                    <td className="strong">{fullName(x.opp)}</td>
-                    <td>
-                      <TierChip tier={tierOf(x.opp.id)} />
-                    </td>
-                    <td>{teamNameOf(x.opp.id) || <span className="muted">—</span>}</td>
-                    <td className="mono">{x.played}</td>
-                    <td className="mono good-text">{x.won}</td>
-                    <td className="mono">{x.played - x.won}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      ) : null}
-    </div>
-  );
+    {matches.length?<section className="card"><header className="card-head"><h2>Performance Dashboard</h2><span className="muted">collective player statistics</span></header><div className="table-scroll"><table className="standings"><thead><tr><th>Hidden-group Rank</th><th>Adults Mixed</th><th>Kids Mixed</th></tr></thead><tbody>{rankCounts.map(x=><tr key={x.rank}><td className="strong">Rank {x.rank}</td><td className="mono">{x.adult}</td><td className="mono">{x.kids}</td></tr>)}</tbody></table></div><p className="muted plan-note">The repeated Rank 1 / Rank 2 positions are intentional: players are ranked inside their actual tier/category group so next season's tiering can be assessed fairly, while the tier column remains hidden.</p></section>:null}
+  </div>;
 }
 
 /* ============================================================
