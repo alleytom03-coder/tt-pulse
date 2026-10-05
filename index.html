@@ -1,3 +1,4 @@
+<!-- TT PULSE V12: editable daily WC bonus is included in current-day and cumulative totals; reconciled historical match attribution remains unchanged. -->
 <!-- 29 SEP 2026 INDIVIDUAL TOURNAMENT REPORT SAFE ADDITION: dynamic report from completed TT Pulse scores; tier-aware ranking with tier hidden; no team standings/totals; Excel + Print/PDF. -->
 <!-- 22 SEP 2026 FINAL LIVE-SCORE REPAIR: Team standings ignore individual/duplicate mirror records; referee-sheet correction applied; WC bonus remains editable; no hard-coded standings. -->
 <!-- 22 SEP 2026 TRUE DYNAMIC STANDINGS FIX: removed hard-coded 19-Sep ledger/canonical/locked totals; all days derive from saved final match scores; editable daily WC bonus remains separate. -->
@@ -8,6 +9,11 @@
 <!-- DAY-BY-DAY CUMULATIVE STANDINGS SAFE 2026-09-20 -->
 <!-- FINAL CHECKED BEFORE GITHUB 20 SEP 2026: duplicate fixture pairs filtered; Day-2 final-only standings; Reopen removes points until re-finalised. -->
 <!-- FINAL DAY-2 CLEAN START: Day 1 carry-forward only; Day 2 date-filtered stats; date-scoped WC bonus; cumulative total. -->
+<!-- TT PULSE FINAL TOURNAMENT DATE FIX 2026-10-02: Standings current day is latest saved FINAL match date across tournament, guaranteeing restored 25-Sep results enter cumulative standings. -->
+<!-- TT PULSE 25 SEP ADULT/KIDS GROUP CLASSIFICATION FIX 2026-10-02: restored Excel matches use explicit fixtureGroup for Standings/date classification; fixes 25-Sep Adult omission from cumulative totals. No scores changed. -->
+<!-- TT PULSE V11: all 19–25 Sep cumulative standings are recomputed from saved final matches; reconciled mode excludes WC/manual bonus. -->
+<!-- TT PULSE 25 SEP LIVE-SCORING + CUMULATIVE DATE FIX 2026-10-02: Live Scoring date list includes saved match dates as well as fixture dates; Standings latest day includes restored final matches. No scores changed. -->
+<!-- TT PULSE AUDIT/STANDINGS HISTORICAL EXCEL SCORE FIX 2026-10-01: restored final Excel matches (including historical Race-to-7 sets) are treated as completed recorded results; no score data changed. -->
 <!-- TT PULSE MOBILE SCORING SAFE 2026-09-20 -->
 <!-- TT PULSE PLAYER + OPPONENT ONLY SEARCH SAFE 2026-09-20 -->
 <!-- TT PULSE ADULT 19 SEP BLANK SCREEN FIX 2026-09-19: removed out-of-scope fixtureIsKids reference from importer -->
@@ -858,7 +864,7 @@ function setWinnerForMatch(m, setIndex) {
      engine now uses normal first-to-11 rules. For the imported 19 Sep Adult
      results, trust the recorded final set score and derive only the winner.
      No automatic Wild Card bonus is restored. */
-  if (m.importedAdultSheet20260919 || m.entryMode === "adult-sheet-import" || m.entryMode === "result-sheet-import-2026-09-20") {
+  if (m.importedAdultSheet20260919 || m.entryMode === "adult-sheet-import" || m.entryMode === "result-sheet-import-2026-09-20" || m.entryMode === "excel-final-scoring-reconciliation") {
     const a = num(s.a), b = num(s.b);
     if (a === b || (a === 0 && b === 0)) return null;
     return a > b ? "a" : "b";
@@ -933,6 +939,18 @@ function matchIsKidsMixed(data, m) {
   if (ta.startsWith("kids-") || tb.startsWith("kids-")) return true;
   const ids = [m.playerA, m.playerB].map(String);
   return (data.players || []).some(p => ids.includes(String(p.id)) && ageGroupOf(p) === "kids");
+}
+
+// 2 Oct 2026: restored Excel matches carry an explicit fixtureGroup.
+ // Prefer that authoritative saved group over player age metadata when separating
+ // Adult vs Kids standings/dates. This prevents Adult 25-Sep matches from being
+ // misclassified as Kids because of stale player age/category metadata.
+function savedMatchIsKids(data, m) {
+  if (!m) return false;
+  const g = String(m.fixtureGroup || "").trim().toLowerCase();
+  if (g === "kids") return true;
+  if (g === "adult") return false;
+  return matchIsKidsMixed(data, m);
 }
 
 function resolveMatchTeamId(data, m, side) {
@@ -3013,6 +3031,9 @@ const duplicateReviewCount = players.filter(
     notify("Duplicate merge is temporarily disabled for data safety. No player was changed.");
   };
 
+  const auditPlayerById = (id) => (data.players || []).find((p) => p.id === id);
+
+
   return (
     <div className="stack">
       <DataBar
@@ -4531,6 +4552,14 @@ function ScoringTab({ data, update, notify }) {
   // enter all three final set scores later without using point-by-point scoring.
   const [delayedDraft, setDelayedDraft] = useState({});
 
+  // 01 OCT 2026 READ-ONLY MATCH COMPLETION AUDIT. Diagnostic only: never writes data.
+  const [auditFrom, setAuditFrom] = useState("2026-09-19");
+  const [auditTo, setAuditTo] = useState("2026-09-25");
+  const [auditGroup, setAuditGroup] = useState("all");
+  const [auditStatus, setAuditStatus] = useState("all");
+  const [auditPlayer, setAuditPlayer] = useState("");
+
+
   useEffect(() => {
     if (!scrollToMatchId) return;
     const timer = setTimeout(() => {
@@ -4558,6 +4587,80 @@ function ScoringTab({ data, update, notify }) {
   const nameOf = (id) => {
     const p = data.players.find((x) => x.id === id);
     return p ? fullName(p) : "—";
+  };
+  const auditPlayerById = (id) => (data.players || []).find((p) => p.id === id);
+
+  const auditGroupFor = (x) => {
+    const pa = auditPlayerById(x.playerA);
+    const pb = auditPlayerById(x.playerB);
+    const fg = String(x.fixtureGroup || "").toLowerCase();
+    const cat = String(x.category || "").toLowerCase();
+    if (fg === "kids" || isKid(cat) || (pa && isKid(pa.gender)) || (pb && isKid(pb.gender))) return "kids";
+    const genders = [pa && pa.gender, pb && pb.gender].filter(Boolean).map((v)=>String(v).toLowerCase());
+    if (genders.length && genders.every((g)=>g.startsWith("f") || g === "woman" || g === "women")) return "female";
+    if (genders.length && genders.every((g)=>g.startsWith("m") || g === "man" || g === "men")) return "male";
+    return "adult";
+  };
+  const auditClassMatch = (m) => {
+    const complete = matchResult(m).complete;
+    const status = String(m.status || "").toLowerCase();
+    const isFinal = status === "final";
+    if ((isFinal && !complete) || (!isFinal && complete)) return "problem";
+    return (isFinal && complete) ? "complete" : "incomplete";
+  };
+  const auditFixtureKey = (f) => [String(f.date||""), String(f.category||""), ...[String(f.playerA||""),String(f.playerB||"")].sort()].join("||");
+  const auditFixtureMap = new Map();
+  (data.fixtures || []).filter((f)=>f.official !== false).forEach((f)=>{
+    const k=auditFixtureKey(f), prev=auditFixtureMap.get(k);
+    if (!prev || (!prev.matchId && f.matchId)) auditFixtureMap.set(k,f);
+  });
+  const auditMatchesById = new Map((data.matches || []).map((m)=>[String(m.id),m]));
+  const auditUsedMatchIds = new Set();
+  const auditEntries = [];
+  Array.from(auditFixtureMap.values()).forEach((f)=>{
+    let m = f.matchId ? auditMatchesById.get(String(f.matchId)) : null;
+    if (!m) m=(data.matches||[]).find((x)=>String(x.fixtureId||"")===String(f.id||""));
+    if (!m) m=(data.matches||[]).find((x)=>String(x.date||"")===String(f.date||"") && ((x.playerA===f.playerA&&x.playerB===f.playerB)||(x.playerA===f.playerB&&x.playerB===f.playerA)));
+    if (m) auditUsedMatchIds.add(String(m.id));
+    auditEntries.push({id:"fixture-"+String(f.id||auditFixtureKey(f)), date:f.date, playerA:f.playerA, playerB:f.playerB, fixtureGroup:f.fixtureGroup, category:f.category, match:m, audit:m ? auditClassMatch(m) : "notplayed"});
+  });
+  (data.matches || []).forEach((m)=>{
+    if (auditUsedMatchIds.has(String(m.id))) return;
+    auditEntries.push({id:"match-"+String(m.id), date:m.date, playerA:m.playerA, playerB:m.playerB, fixtureGroup:m.fixtureGroup, category:m.category, match:m, audit:auditClassMatch(m)});
+  });
+  // Completion audit counts SAVED MATCH RECORDS only. A fixture without a saved result
+  // is not called "Not Played" because TT Pulse cannot know whether it was physically played.
+  const auditFilteredBase = auditEntries.filter((e)=>{
+    if (!e.match) return false;
+    const d=String(e.date||"");
+    if (auditFrom && d<auditFrom) return false;
+    if (auditTo && d>auditTo) return false;
+    const g=auditGroupFor(e);
+    return auditGroup === "all" || g === auditGroup;
+  });
+  const auditFixtureGaps = auditEntries.filter((e)=>{
+    if (e.match) return false;
+    const d=String(e.date||"");
+    if (auditFrom && d<auditFrom) return false;
+    if (auditTo && d>auditTo) return false;
+    const g=auditGroupFor(e);
+    return auditGroup === "all" || g === auditGroup;
+  });
+  const auditRows = (auditStatus === "notplayed" ? auditFixtureGaps : auditFilteredBase).filter((e)=>{
+    if (auditStatus === "complete" && e.audit !== "complete") return false;
+    if (auditStatus === "incomplete" && e.audit !== "incomplete") return false;
+    if (auditStatus === "notplayed" && e.audit !== "notplayed") return false;
+    if (auditStatus === "problem" && e.audit !== "problem") return false;
+    const q=auditPlayer.trim().toLowerCase();
+    if (q && !(`${nameOf(e.playerA)} ${nameOf(e.playerB)}`.toLowerCase().includes(q))) return false;
+    return true;
+  }).sort((a,b)=>String(a.date||"").localeCompare(String(b.date||"")) || nameOf(a.playerA).localeCompare(nameOf(b.playerA)));
+  const auditCounts = {
+    total:auditFilteredBase.length,
+    complete:auditFilteredBase.filter(e=>e.audit==="complete").length,
+    incomplete:auditFilteredBase.filter(e=>e.audit==="incomplete").length,
+    notplayed:auditFixtureGaps.length,
+    problem:auditFilteredBase.filter(e=>e.audit==="problem").length
   };
 
   /* Whoever is keeping score on a given day. A name is enough — most of
@@ -4618,7 +4721,12 @@ function ScoringTab({ data, update, notify }) {
     });
   const groupOfficialFixtures = Array.from(dedupedFixtureMap.values());
   const duplicateFixtureCount = Math.max(0, groupOfficialFixturesRaw.length - groupOfficialFixtures.length);
-  const scoringDates = Array.from(new Set(groupOfficialFixtures.map(f=>fDateKey(f)).filter(Boolean))).sort();
+  const scoringDates = Array.from(new Set([
+    ...groupOfficialFixtures.map(f=>fDateKey(f)).filter(Boolean),
+    ...(data.matches || [])
+      .filter(m => matchGroup === "kids" ? matchIsKidsMixed(data, m) : !matchIsKidsMixed(data, m))
+      .map(m => String(m.date || "")).filter(Boolean)
+  ])).sort();
   const effectiveScoringDate = scoringDates.includes(scoringDate) ? scoringDate : (scoringDates[0] || scoringDate);
   const todaysFixtures = groupOfficialFixtures
     .filter(f => fDateKey(f) === effectiveScoringDate && !f.matchId)
@@ -5170,6 +5278,27 @@ function ScoringTab({ data, update, notify }) {
         note="Set scores import as 11-9 style text."
         notify={notify}
       />
+
+      <section className="card">
+        <header className="card-head">
+          <h2>Match Completion Audit</h2>
+          <span className="muted">Read-only check — saved match completion is separate from fixture rows with no saved result</span>
+        </header>
+        <div className="grid-form four">
+          <Field label="From"><input type="date" value={auditFrom} onChange={(e)=>setAuditFrom(e.target.value)} /></Field>
+          <Field label="To"><input type="date" value={auditTo} onChange={(e)=>setAuditTo(e.target.value)} /></Field>
+          <Field label="Group"><select value={auditGroup} onChange={(e)=>setAuditGroup(e.target.value)}><option value="all">All</option><option value="kids">Kids Mixed</option><option value="male">Adult Male</option><option value="female">Adult Female</option></select></Field>
+          <Field label="Status"><select value={auditStatus} onChange={(e)=>setAuditStatus(e.target.value)}><option value="all">All</option><option value="complete">Complete</option><option value="incomplete">Not Complete</option><option value="notplayed">Fixture Without Saved Result</option><option value="problem">Problem Matches</option></select></Field>
+          <Field label="Player search"><input value={auditPlayer} placeholder="First or last name" onChange={(e)=>setAuditPlayer(e.target.value)} /></Field>
+        </div>
+        <div className="chips" style={{marginTop:12}}>
+          <span className="chip">Total {auditCounts.total}</span><span className="chip">Complete {auditCounts.complete}</span><span className="chip">Incomplete {auditCounts.incomplete}</span><span className="chip">Fixture gaps {auditFixtureGaps.length}</span><span className="chip">Problem {auditCounts.problem}</span>
+        </div>
+        <div className="table-wrap" style={{marginTop:12}}>
+          <table><thead><tr><th>Date</th><th>Group</th><th>Player A</th><th>Player B</th><th>Stored status</th><th>Audit</th><th>Sets</th></tr></thead>
+          <tbody>{auditRows.length ? auditRows.map((e)=>{ const m=e.match; const g=auditGroupFor(e); return <tr key={e.id}><td>{prettyDate(e.date)}</td><td>{g==="kids"?"Kids Mixed":g==="male"?"Adult Male":g==="female"?"Adult Female":"Adult"}</td><td>{nameOf(e.playerA)}</td><td>{nameOf(e.playerB)}</td><td>{m?String(m.status||"—"):"—"}</td><td>{e.audit==="complete"?"COMPLETE":e.audit==="incomplete"?"INCOMPLETE":e.audit==="notplayed"?"NO SAVED RESULT":"PROBLEM"}</td><td>{m?(m.sets||[]).slice(0,3).map((x)=>`${x.a ?? 0}-${x.b ?? 0}`).join(", "):"—"}</td></tr>}) : <tr><td colSpan="7" className="muted">No saved match records found for these filters.</td></tr>}</tbody></table>
+        </div>
+      </section>
 
       <section className="card">
         <header className="card-head">
@@ -5764,7 +5893,7 @@ function computeStandings(data, day, group = "all") {
     // Adult matches from 20 Sep onward must continue accumulating normally.
     if (useAdult19SepLedger && !matchIsKidsMixed(data, m) && String(m.date) === "2026-09-19") return;
     if (!wholeRun && m.date !== day) return;
-    const matchKids = matchIsKidsMixed(data, m);
+    const matchKids = savedMatchIsKids(data, m);
     if (group === "kids" && !matchKids) return;
     if (group === "adult" && matchKids) return;
     const r = matchResult(m);
@@ -5772,8 +5901,23 @@ function computeStandings(data, day, group = "all") {
     // AND the match is Final. Reopen immediately removes it from today's standings
     // until it is completed/finalised again.
     if (!r.complete || String(m.status || "final") !== "final") return;
-    const teamAId = resolveMatchTeamId(data, m, "a");
-    const teamBId = resolveMatchTeamId(data, m, "b");
+    // 3 Oct 2026 Excel-reconciled mode: the saved match team IDs are authoritative.
+    // Do not reassign a historical match from current player membership.
+    const strictExcel = data.excelReconciledNoWildcard === true;
+    const strictTeamId = (raw, isKids) => {
+      if (!strictExcel) return null;
+      const rawId = String(raw == null ? "" : raw);
+      if (!isKids && byId[rawId]) return rawId;
+      const saved = (data.teams || []).find(t => String(t.id) === rawId);
+      const txt = String((saved && saved.name) || raw || "").toLowerCase();
+      const colour = (txt.match(/\b(red|blue|orange|black)\b/) || [])[1];
+      if (!colour) return rawId;
+      if (isKids) return `kids-${colour}`;
+      const mapped = teamPool.find(t => String(t.name || "").toLowerCase().includes(colour));
+      return mapped ? mapped.id : rawId;
+    };
+    const teamAId = strictTeamId(m.teamA, matchKids) || resolveMatchTeamId(data, m, "a");
+    const teamBId = strictTeamId(m.teamB, matchKids) || resolveMatchTeamId(data, m, "b");
 
     // 20 Sep standings link fix: completed Adult matches can carry a historical/imported
     // team id that differs from the current formed-team id. Resolve the standings row
@@ -5805,8 +5949,8 @@ function computeStandings(data, day, group = "all") {
       }
       return null;
     };
-    const A = standingRowForSide(teamAId, m.teamA, m.playerA);
-    const B = standingRowForSide(teamBId, m.teamB, m.playerB);
+    const A = strictExcel ? byId[teamAId] : standingRowForSide(teamAId, m.teamA, m.playerA);
+    const B = strictExcel ? byId[teamBId] : standingRowForSide(teamBId, m.teamB, m.playerB);
     if (!A || !B) return;
     // A same-colour practice/test match has a valid individual result, but must not
     // add and subtract points inside the same team row. Official league fixtures are
@@ -5867,7 +6011,7 @@ function computeStandings(data, day, group = "all") {
     const vs = {};
     (data.teams || []).filter(o => String(o.id) !== String(t.id)).forEach(o => { vs[o.id] = new Set(); });
     (data.matches || []).forEach((m) => {
-      const matchKids = matchIsKidsMixed(data, m);
+      const matchKids = savedMatchIsKids(data, m);
       if (group === "kids" && !matchKids) return;
       if (group === "adult" && matchKids) return;
       const aId = resolveMatchTeamId(data, m, "a");
@@ -5882,8 +6026,8 @@ function computeStandings(data, day, group = "all") {
     t.wcVs = Object.fromEntries(Object.entries(vs).map(([k,v]) => [k, v.size]));
     t.wcUsed = Object.values(t.wcVs).reduce((sum,n) => sum + Number(n || 0), 0);
     t.wcLeft = Math.max(0, 9 - t.wcUsed);
-    t.manualBonus = wholeRun ? Number((data.bonuses || {})[t.id]) || 0 : 0;
-    t.points = t.setPoints + t.matchPoints + t.manualBonus; // manual referee Wild Card bonus is included immediately in total/ranking
+    t.manualBonus = data.excelReconciledNoWildcard === true ? 0 : (wholeRun ? Number((data.bonuses || {})[t.id]) || 0 : 0);
+    t.points = t.setPoints + t.matchPoints + t.manualBonus; // reconciled mode intentionally excludes Wild Card/manual bonus
   });
   table.sort((a, b) => b.points - a.points || b.matchWins - a.matchWins || b.setsWon - a.setsWon || a.name.localeCompare(b.name));
   return table;
@@ -5960,10 +6104,13 @@ function StandingsTab({ data, update, notify }) {
   const wallClockToday = isoLocalToday();
   // The active standings day is the latest date that actually has a completed match.
   // Entering a historical result on 21 Sep must therefore remain under its fixture date (20 Sep).
-  const completedGroupDates = Array.from(new Set((data.matches || [])
-    .filter(m => (ageFilter === "kids" ? matchIsKidsMixed(data, m) : !matchIsKidsMixed(data, m)) && matchResult(m).complete)
+  // FINAL-DATE FIX 2 OCT: the tournament's current/final standings day is the
+  // latest saved FINAL match date across the tournament. Do not infer this from
+  // player age/category metadata; that previously made Adults stop at 24 Sep.
+  const completedTournamentDates = Array.from(new Set((data.matches || [])
+    .filter(m => String(m.status || "") === "final" || matchResult(m).complete)
     .map(m => String(m.date || "")).filter(Boolean))).sort();
-  const currentDay = completedGroupDates.filter(d => d <= wallClockToday).slice(-1)[0] || wallClockToday;
+  const currentDay = completedTournamentDates.filter(d => d <= wallClockToday).slice(-1)[0] || wallClockToday;
   const prettyDay = (iso) => {
     const p = String(iso || "").split("-");
     if (p.length !== 3) return iso;
@@ -5971,10 +6118,13 @@ function StandingsTab({ data, update, notify }) {
     return `${Number(p[2])} ${months[Number(p[1]) - 1] || p[1]}`;
   };
 
-  const isGroupRow = (m) => ageFilter === "kids" ? matchIsKidsMixed(data, m) : !matchIsKidsMixed(data, m);
+  const isGroupRow = (m) => ageFilter === "kids" ? savedMatchIsKids(data, m) : !savedMatchIsKids(data, m);
   const tournamentDates = Array.from(new Set([
     ...(data.matches || []).filter(isGroupRow).map(m => String(m.date || "")).filter(Boolean),
-    ...(data.fixtures || []).filter(isGroupRow).map(f => String(f.date || "")).filter(Boolean),
+    ...(data.fixtures || []).filter(f => ageFilter === "kids"
+      ? (String(f.fixtureGroup || "").toLowerCase() === "kids" || (String(f.fixtureGroup || "") === "" && matchIsKidsMixed(data, f)))
+      : (String(f.fixtureGroup || "").toLowerCase() === "adult" || (String(f.fixtureGroup || "") === "" && !matchIsKidsMixed(data, f)))
+    ).map(f => String(f.date || "")).filter(Boolean),
     currentDay
   ])).filter(d => d <= currentDay).sort();
   const pastDates = tournamentDates.filter(d => d < currentDay);
